@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -59,6 +59,37 @@ describe("CaseHome documents", () => {
     ["a wrong kind", validCaseHomeYaml.replace("CaseHome", "CaseLocator")],
     ["an unknown field", `${validCaseHomeYaml}extra: value\n`],
     [
+      "an unknown metadata field",
+      validCaseHomeYaml.replace(
+        "  name: example-v-example-city\n",
+        "  name: example-v-example-city\n  extra: value\n",
+      ),
+    ],
+    ["an unknown spec field", `${validCaseHomeYaml}  extra: value\n`],
+    [
+      "an unknown graph-root field",
+      validCaseHomeYaml.replace(
+        "    id: root\n",
+        "    id: root\n    extra: value\n",
+      ),
+    ],
+    [
+      "an unknown source-reference field",
+      validCaseHomeYaml.replace(
+        "    id: root\n",
+        `    id: root
+    sources:
+      - mutation: mutation-1
+        request: request-1
+        path: $.response.body
+        source_system: courtlistener
+        source_model: docket
+        source_id: 1
+        extra: value
+`,
+      ),
+    ],
+    [
       "a non-ISO timestamp",
       validCaseHomeYaml.replace(
         '"2026-08-20T00:00:00.000Z"',
@@ -118,6 +149,21 @@ describe("CaseHome documents", () => {
     });
   });
 
+  test("replaces root.yaml through a sibling-file rename", async () => {
+    const directory = await makeWorkingDirectory();
+    const rootPath = path.join(directory, "root.yaml");
+    await writeFile(rootPath, validCaseHomeYaml);
+    const original = await stat(rootPath);
+
+    await writeCaseHome(rootPath, {
+      type: "replacePackagePath",
+      packagePath: ["../shared"],
+    });
+
+    const replaced = await stat(rootPath);
+    expect(replaced.ino).not.toBe(original.ino);
+  });
+
   test("leaves the original document unchanged when replacement is invalid", async () => {
     const directory = await makeWorkingDirectory();
     const rootPath = path.join(directory, "root.yaml");
@@ -132,5 +178,6 @@ describe("CaseHome documents", () => {
       }),
     ).rejects.toThrow();
     await expect(readFile(rootPath, "utf8")).resolves.toBe(original);
+    await expect(readdir(directory)).resolves.toEqual(["root.yaml"]);
   });
 });

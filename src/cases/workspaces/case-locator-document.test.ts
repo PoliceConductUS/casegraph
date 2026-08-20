@@ -57,7 +57,36 @@ describe("CaseLocator documents", () => {
         "cases/example-v-example-city/root.yaml",
       ),
     ],
+    [
+      "a home path with a trailing separator",
+      validLocatorYaml.replace(
+        "/cases/example-v-example-city/root.yaml",
+        "/cases/example-v-example-city/root.yaml/",
+      ),
+    ],
+    [
+      "a home path with a current-directory segment",
+      validLocatorYaml.replace(
+        "/cases/example-v-example-city/root.yaml",
+        "/cases/./example-v-example-city/root.yaml",
+      ),
+    ],
+    [
+      "a home path with a parent-directory segment",
+      validLocatorYaml.replace(
+        "/cases/example-v-example-city/root.yaml",
+        "/cases/other/../example-v-example-city/root.yaml",
+      ),
+    ],
     ["an unknown field", `${validLocatorYaml}extra: value\n`],
+    [
+      "an unknown metadata field",
+      validLocatorYaml.replace(
+        "  name: example-v-example-city\n",
+        "  name: example-v-example-city\n  extra: value\n",
+      ),
+    ],
+    ["an unknown spec field", `${validLocatorYaml}  extra: value\n`],
     ["malformed YAML", "apiVersion: [\n"],
   ])("rejects %s", async (_description, yaml) => {
     const directory = await makeWorkingDirectory();

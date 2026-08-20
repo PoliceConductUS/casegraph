@@ -6,6 +6,15 @@ import { z } from "zod";
 export const CASEGRAPH_API_VERSION =
   "policeconduct.org/casegraph/v1alpha1" as const;
 
+function isCanonicalCaseHomeRoot(value: string): boolean {
+  return (
+    path.isAbsolute(value) &&
+    value === path.normalize(value) &&
+    path.basename(value) === "root.yaml" &&
+    value.endsWith("root.yaml")
+  );
+}
+
 export const CaseLocatorSchema = z
   .object({
     apiVersion: z.literal(CASEGRAPH_API_VERSION),
@@ -13,10 +22,7 @@ export const CaseLocatorSchema = z
     metadata: z.object({ name: z.string().min(1) }).strict(),
     spec: z
       .object({
-        home: z
-          .string()
-          .refine(path.isAbsolute)
-          .refine((value) => path.basename(value) === "root.yaml"),
+        home: z.string().refine(isCanonicalCaseHomeRoot),
       })
       .strict(),
   })
