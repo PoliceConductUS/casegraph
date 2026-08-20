@@ -23,11 +23,7 @@ import {
   importCourtListenerDocket,
 } from "./cases/import/courtlistener/docket/command.js";
 import type { CourtListenerImportRuntime } from "./cases/import/courtlistener/docket/types.js";
-import {
-  casesNewHelp,
-  extraCaseIdArgumentsResult,
-  runNewCaseCommand,
-} from "./cases/new/command.js";
+import { casesNewHelp, runNewCaseCommand } from "./cases/new/command.js";
 import type { WorkspaceRuntime } from "./cases/workspaces/create.js";
 import { casesReportHelp, runReportCommand } from "./cases/report/command.js";
 import { Command } from "commander";
@@ -241,27 +237,22 @@ export async function runCasegraph(
     .command("new")
     .helpOption(false)
     .argument("[caseId]")
-    .argument("[extra...]")
     .requiredOption("--home <directory>")
     .option("--yes")
     .action(
       async (
         caseId: string | undefined,
-        extra: string[],
         options: { home?: string; yes?: boolean },
       ) => {
-        commandResult =
-          extra.length > 0
-            ? extraCaseIdArgumentsResult([caseId ?? "", ...extra])
-            : await runNewCaseCommand(
-                {
-                  caseId: caseId ?? "",
-                  cwd,
-                  home: options.home,
-                  yes: options.yes === true,
-                },
-                runtime,
-              );
+        commandResult = await runNewCaseCommand(
+          {
+            caseId: caseId ?? "",
+            cwd,
+            home: options.home,
+            yes: options.yes === true,
+          },
+          runtime,
+        );
       },
     );
 
@@ -369,7 +360,9 @@ export async function runCasegraph(
     return {
       exitCode: 1,
       stderr:
-        commanderError.code === "commander.unknownOption"
+        commanderError.code === "commander.unknownOption" ||
+        commanderError.code === "commander.missingMandatoryOptionValue" ||
+        commanderError.code === "commander.excessArguments"
           ? `${commanderError.message}\n`
           : casesHelp,
     };

@@ -19,7 +19,10 @@ import {
   readCaseHome,
   writeCaseHome,
 } from "../src/cases/workspaces/case-home-document.js";
-import { readCaseLocator } from "../src/cases/workspaces/case-locator-document.js";
+import {
+  readCaseLocator,
+  writeCaseLocator,
+} from "../src/cases/workspaces/case-locator-document.js";
 import { isUsableExtractedPdfText } from "../src/cases/documents/source-artifacts.js";
 import { runPdfToMarkdownWorkflow } from "../src/cases/analysis/tasks/pdf-to-markdown/run.js";
 import {
@@ -2398,7 +2401,7 @@ describe("casegraph cases new external homes", () => {
 
       expect(result.exitCode).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain(
-        "--home <directory>",
+        "required option '--home <directory>' not specified",
       );
       await expect(
         stat(path.join(workingDirectory, ".casegraph")),
@@ -2458,6 +2461,118 @@ describe("casegraph cases new external homes", () => {
         metadata: { name: "example-v-example-city" },
         spec: { home: homeRoot },
       });
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a missing case ID without creating a home or locator", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+    const homeDirectory = path.join(workingDirectory, "case-home");
+
+    try {
+      const result = await runNewCasegraph(
+        ["cases", "new", "--home", homeDirectory],
+        workingDirectory,
+        vi.fn(() => Promise.resolve(true)),
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "Missing required case ID",
+      );
+      await expect(stat(homeDirectory)).rejects.toThrow();
+      await expect(
+        stat(path.join(workingDirectory, ".casegraph")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects extra case-ID positionals without creating a home or locator", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+    const homeDirectory = path.join(workingDirectory, "case-home");
+
+    try {
+      const result = await runNewCasegraph(
+        ["cases", "new", "Example", "v", "--home", homeDirectory],
+        workingDirectory,
+        vi.fn(() => Promise.resolve(true)),
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "too many arguments",
+      );
+      await expect(stat(homeDirectory)).rejects.toThrow();
+      await expect(
+        stat(path.join(workingDirectory, ".casegraph")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("creates separate external homes for an uppercase court-style case ID", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+    const firstHome = path.join(workingDirectory, "case-one");
+    const secondHome = path.join(workingDirectory, "case-two");
+
+    try {
+      const first = await runNewCasegraph(
+        ["cases", "new", "1-26-CV-00001", "--home", firstHome, "--yes"],
+        workingDirectory,
+        vi.fn(() => Promise.resolve(false)),
+      );
+      const second = await runNewCasegraph(
+        ["cases", "new", "case-two", "--home", secondHome, "--yes"],
+        workingDirectory,
+        vi.fn(() => Promise.resolve(false)),
+      );
+
+      expect(first.exitCode).toBe(0);
+      expect(second.exitCode).toBe(0);
+      await expect(
+        readCaseHome(path.join(firstHome, "root.yaml")),
+      ).resolves.toMatchObject({
+        metadata: { name: "1-26-CV-00001" },
+      });
+      await expect(
+        readCaseHome(path.join(secondHome, "root.yaml")),
+      ).resolves.toMatchObject({
+        metadata: { name: "case-two" },
+      });
+      await expect(
+        stat(path.join(workingDirectory, "current-case")),
+      ).rejects.toThrow();
+      await expect(
+        stat(path.join(workingDirectory, ".casegraph-current")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a Windows reserved case ID without creating a home or locator", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+    const homeDirectory = path.join(workingDirectory, "case-home");
+
+    try {
+      const result = await runNewCasegraph(
+        ["cases", "new", "CON", "--home", homeDirectory],
+        workingDirectory,
+        vi.fn(() => Promise.resolve(true)),
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "not a safe folder name",
+      );
+      await expect(stat(homeDirectory)).rejects.toThrow();
+      await expect(
+        stat(path.join(workingDirectory, ".casegraph")),
+      ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }
@@ -2625,13 +2740,22 @@ describe("casegraph cases new external homes", () => {
   test("rejects a case-insensitive locator collision before creating the home", async () => {
     const workingDirectory = await makeWorkingDirectory();
     const homeDirectory = path.join(workingDirectory, "case-home");
+    const locatorRoot = path.join(
+      workingDirectory,
+      ".casegraph",
+      "Case-One",
+      "root.yaml",
+    );
     await mkdir(path.join(workingDirectory, ".casegraph", "Case-One"), {
       recursive: true,
     });
-    await writeFile(
-      path.join(workingDirectory, ".casegraph", "Case-One", "root.yaml"),
-      "existing locator",
-    );
+    await writeCaseLocator(locatorRoot, {
+      apiVersion: CASEGRAPH_API_VERSION,
+      kind: "CaseLocator",
+      metadata: { name: "Case-One" },
+      spec: { home: path.join(workingDirectory, "existing-home", "root.yaml") },
+    });
+    const locatorBefore = await readFile(locatorRoot, "utf8");
 
     try {
       const result = await runNewCasegraph(
@@ -2643,6 +2767,7 @@ describe("casegraph cases new external homes", () => {
       expect(result.exitCode).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("already exists");
       await expect(stat(homeDirectory)).rejects.toThrow();
+      await expect(readFile(locatorRoot, "utf8")).resolves.toBe(locatorBefore);
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }
