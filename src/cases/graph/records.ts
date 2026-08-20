@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { CaseGraphRoot } from "../workspaces/case-home-document.js";
 
 const SourceSchema = z.looseObject({
   download_url: z.string().optional(),
@@ -8,7 +9,7 @@ const SourceSchema = z.looseObject({
   is_available: z.string().optional(),
   source_system: z.string().optional(),
   source_model: z.string().optional(),
-  source_id: z.union([z.string(), z.number()]).optional(),
+  source_id: z.string().optional(),
   source_url: z.string().optional(),
 });
 
@@ -299,10 +300,21 @@ function parseGraphNodeYaml(content: string): unknown {
 
 export async function readGraphNodes(
   homeDirectory: string,
-  rootNode: CaseNode,
+  rootNode: CaseGraphRoot,
 ): Promise<ParsedGraphNode[]> {
   const entries = await readdir(homeDirectory, { withFileTypes: true });
-  const parsedNodes: ParsedGraphNode[] = [{ fileStem: "root", node: rootNode }];
+  const parsedNodes: ParsedGraphNode[] = [
+    {
+      fileStem: "root",
+      node: {
+        ...rootNode,
+        sources: rootNode.sources?.map((source) => ({
+          ...source,
+          source_id: String(source.source_id),
+        })),
+      },
+    },
+  ];
 
   for (const entry of entries) {
     if (

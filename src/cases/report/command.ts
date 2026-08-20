@@ -1,11 +1,11 @@
 import {
   graphTraversalSummary,
   readGraphNodes,
-  type CaseNode,
   type DocketEntryNode,
   type DocumentNode,
 } from "../graph/records.js";
 import { resolveOnlyCaseId } from "../workspaces.js";
+import type { CaseGraphRoot } from "../workspaces/case-home-document.js";
 import type { WorkspaceRuntime } from "../workspaces/create.js";
 import { loadCaseWorkspace } from "../workspaces/load.js";
 
@@ -109,7 +109,7 @@ function documentRecord(node: DocumentNode): DocumentRecord {
 
 async function readCaseReport(
   homeDirectory: string,
-  rootNode: CaseNode,
+  rootNode: CaseGraphRoot,
 ): Promise<CaseReport> {
   const graphNodes = await readGraphNodes(homeDirectory, rootNode);
   const docketEntries: DocketEntryRecord[] = [];
