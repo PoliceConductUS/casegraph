@@ -18,6 +18,16 @@ export type CreationRequest =
 export type WorkspaceRuntime = {
   casegraphHome?: string;
   approveCreation?: (request: CreationRequest) => Promise<boolean>;
+  requestPackagePathReplacement?: (request: {
+    caseId: string;
+    homeRoot: string;
+    missingStoredPath: string;
+  }) => Promise<string | undefined>;
+  approvePackagePathReplacement?: (request: {
+    oldStoredPath: string;
+    newStoredPath: string;
+    homeRoot: string;
+  }) => Promise<boolean>;
 };
 
 export type PreparedCaseHome = {

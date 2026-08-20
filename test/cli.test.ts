@@ -58,7 +58,10 @@ async function runCasegraph(
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync(cliPath, args, { cwd });
+    const { stdout, stderr } = await execFileAsync(cliPath, args, {
+      cwd,
+      env: { ...process.env, HOME: cwd },
+    });
 
     return { exitCode: 0, stdout, stderr };
   } catch (error) {
@@ -206,11 +209,23 @@ async function runCasegraphWithFixtureAi(
   args: string[],
   cwd: string,
 ): Promise<CliResult> {
-  const result = await runCasegraphInProcess(args, cwd, {
-    env: process.env,
-    incidentFromComplaintAiExtractor: fixtureIncidentFromComplaintAiExtractor,
-    pdfToMarkdownVisionExtractor: null,
-  });
+  const originalHome = process.env.HOME;
+  process.env.HOME = cwd;
+
+  let result;
+  try {
+    result = await runCasegraphInProcess(args, cwd, {
+      env: process.env,
+      incidentFromComplaintAiExtractor: fixtureIncidentFromComplaintAiExtractor,
+      pdfToMarkdownVisionExtractor: null,
+    });
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  }
 
   return {
     exitCode: result.exitCode,
@@ -288,6 +303,43 @@ async function writeValidCaseRoot(
     rootPath,
     'type: node\nkind: case\nid: root\ncreated_at: "2026-05-12T00:00:00.000Z"\nupdated_at: "2026-05-12T00:00:00.000Z"\n',
   );
+  await writeExternalCaseLocator(workingDirectory, caseId);
+}
+
+async function writeExternalCaseLocator(
+  workingDirectory: string,
+  caseId: string,
+): Promise<void> {
+  const homeDirectory = path.join(workingDirectory, "case-homes", caseId);
+  const homeRoot = path.join(homeDirectory, "root.yaml");
+  const locatorRoot = path.join(
+    workingDirectory,
+    ".casegraph",
+    caseId,
+    "root.yaml",
+  );
+  await mkdir(homeDirectory, { recursive: true });
+  await mkdir(path.dirname(locatorRoot), { recursive: true });
+  await writeCaseHome(homeRoot, {
+    type: "create",
+    value: {
+      apiVersion: CASEGRAPH_API_VERSION,
+      kind: "CaseHome",
+      metadata: { name: caseId },
+      spec: {
+        graphRoot: { type: "node", kind: "case", id: "root" },
+        packagePath: [],
+        createdAt: "2026-08-20T00:00:00.000Z",
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      },
+    },
+  });
+  await writeCaseLocator(locatorRoot, {
+    apiVersion: CASEGRAPH_API_VERSION,
+    kind: "CaseLocator",
+    metadata: { name: caseId },
+    spec: { home: homeRoot },
+  });
 }
 
 async function writeImportedCaseState(
@@ -324,6 +376,7 @@ async function writeImportedCaseState(
     path.join(workspacePath, "attorney-one.yaml"),
     'type: "node"\nkind: "attorney"\nid: "attorney-one"\nsources:\n  - source_system: "courtlistener"\n    source_model: "attorney"\n',
   );
+  await writeExternalCaseLocator(workingDirectory, caseId);
 }
 
 async function writeCaseWithAvailableComplaint(
