@@ -13,7 +13,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, test, vi } from "vitest";
-import { runCasegraph as runCasegraphInProcess } from "../src/cli.js";
+import {
+  createWorkspacePromptCallbacks,
+  runCasegraph as runCasegraphInProcess,
+} from "../src/cli.js";
 import {
   CASEGRAPH_API_VERSION,
   readCaseHome,
@@ -824,6 +827,105 @@ describe("casegraph packages add failures", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("repair callback failed");
       expect(result.stderr).not.toContain("Usage: casegraph packages add");
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("workspace creation prompt decisions", () => {
+  test("an empty creation prompt answer declines the exact requested target", async () => {
+    const target = "/cases/example-v-example-city";
+    const ask = vi.fn(() => Promise.resolve(""));
+    const prompts = createWorkspacePromptCallbacks({
+      cwd: "/invocation",
+      isTTY: true,
+      ask,
+      write: vi.fn(),
+    });
+
+    await expect(
+      prompts.approveCreation({ type: "createHomeDirectory", path: target }),
+    ).resolves.toBe(false);
+    expect(ask).toHaveBeenCalledWith(
+      `Create case home directory: ${target}? [y/N] `,
+    );
+  });
+});
+
+describe("workspace repair prompt decisions", () => {
+  test("a replacement answer is normalized from the invocation directory", async () => {
+    const cwd = "/invocation/casegraph";
+    const write = vi.fn();
+    const prompts = createWorkspacePromptCallbacks({
+      cwd,
+      isTTY: true,
+      ask: vi.fn(() => Promise.resolve("../shared-packages")),
+      write,
+    });
+
+    await expect(
+      prompts.requestPackagePathReplacement({
+        caseId: "example-v-example-city",
+        homeRoot: "/cases/example-v-example-city/root.yaml",
+        missingStoredPath: "../missing-packages",
+      }),
+    ).resolves.toBe(path.resolve(cwd, "../shared-packages"));
+    expect(write).toHaveBeenCalledWith(
+      "Missing package path for case example-v-example-city:\n" +
+        "Stored path: ../missing-packages\n" +
+        "CaseHome root: /cases/example-v-example-city/root.yaml\n",
+    );
+  });
+
+  test("an empty final repair prompt leaves the CaseHome unchanged", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+    const invocationDirectory = path.join(workingDirectory, "invocation");
+    const replacementDirectory = path.join(workingDirectory, "shared-packages");
+    const missingStoredPath = "missing-packages";
+    const answers = ["../shared-packages", ""];
+
+    try {
+      await mkdir(invocationDirectory);
+      await mkdir(replacementDirectory);
+      const homeDirectory = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+        { packagePath: [missingStoredPath] },
+      );
+      const homeRoot = path.join(homeDirectory, "root.yaml");
+      const ask = vi.fn(() => Promise.resolve(answers.shift() ?? ""));
+      const prompts = createWorkspacePromptCallbacks({
+        cwd: invocationDirectory,
+        isTTY: true,
+        ask,
+        write: vi.fn(),
+      });
+
+      const result = await runCasegraphInProcess(
+        ["cases", "report", "example-v-example-city"],
+        invocationDirectory,
+        {
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
+          ...prompts,
+        },
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(
+        `Declined package path replacement for case example-v-example-city: ${missingStoredPath} -> ${path.relative(homeDirectory, replacementDirectory)}`,
+      );
+      await expect(readCaseHome(homeRoot)).resolves.toMatchObject({
+        spec: { packagePath: [missingStoredPath] },
+      });
+      expect(ask).toHaveBeenNthCalledWith(
+        2,
+        "Replace stored package path in " +
+          `${homeRoot}?\n` +
+          `Old: ${missingStoredPath}\n` +
+          `New: ${path.relative(homeDirectory, replacementDirectory)}\n` +
+          "Apply this CaseHome change? [y/N] ",
+      );
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }

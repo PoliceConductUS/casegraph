@@ -42,6 +42,91 @@ type Runtime = CourtListenerImportRuntime &
   AnalysisNewRuntime &
   WorkspaceRuntime;
 
+type WorkspacePromptCallbacks = Required<
+  Pick<
+    WorkspaceRuntime,
+    | "approveCreation"
+    | "requestPackagePathReplacement"
+    | "approvePackagePathReplacement"
+  >
+>;
+
+type WorkspacePromptInput = {
+  cwd: string;
+  isTTY: boolean;
+  ask: (question: string) => Promise<string>;
+  write: (message: string) => void;
+};
+
+function normalizePromptedPath(
+  answer: string,
+  cwd: string,
+): string | undefined {
+  const trimmed = answer.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const unquoted = trimmed.replace(/^(['"])(.*)\1$/, "$2");
+  return path.isAbsolute(unquoted) ? unquoted : path.resolve(cwd, unquoted);
+}
+
+function isAffirmative(answer: string): boolean {
+  return /^(y|yes)$/i.test(answer.trim());
+}
+
+export function createWorkspacePromptCallbacks({
+  cwd,
+  isTTY,
+  ask,
+  write,
+}: WorkspacePromptInput): WorkspacePromptCallbacks {
+  return {
+    async approveCreation(request) {
+      if (!isTTY) {
+        return false;
+      }
+
+      const target =
+        request.type === "createHomeDirectory"
+          ? "case home directory"
+          : "CaseHome root";
+      return isAffirmative(
+        await ask(`Create ${target}: ${request.path}? [y/N] `),
+      );
+    },
+    async requestPackagePathReplacement(request) {
+      if (!isTTY) {
+        return undefined;
+      }
+
+      write(
+        `Missing package path for case ${request.caseId}:\n` +
+          `Stored path: ${request.missingStoredPath}\n` +
+          `CaseHome root: ${request.homeRoot}\n`,
+      );
+      return normalizePromptedPath(
+        await ask("Enter replacement directory, or press Enter to cancel: "),
+        cwd,
+      );
+    },
+    async approvePackagePathReplacement(request) {
+      if (!isTTY) {
+        return false;
+      }
+
+      return isAffirmative(
+        await ask(
+          `Replace stored package path in ${request.homeRoot}?\n` +
+            `Old: ${request.oldStoredPath}\n` +
+            `New: ${request.newStoredPath}\n` +
+            "Apply this CaseHome change? [y/N] ",
+        ),
+      );
+    },
+  };
+}
+
 const rootHelp = `Usage: casegraph <command>
 
 CaseGraph creates separated case homes for personal case analysis.
@@ -464,42 +549,29 @@ export async function runCasegraph(
 }
 
 async function main(): Promise<void> {
-  function normalizePromptedPath(answer: string): string | undefined {
-    const trimmed = answer.trim();
-    if (!trimmed) {
-      return undefined;
+  const cwd = process.cwd();
+  async function ask(question: string): Promise<string> {
+    const readline = createInterface({
+      input: process.stdin,
+      output: process.stderr,
+    });
+    try {
+      return await readline.question(question);
+    } finally {
+      readline.close();
     }
-
-    const unquoted = trimmed.replace(/^(['"])(.*)\1$/, "$2");
-    return path.isAbsolute(unquoted)
-      ? unquoted
-      : path.resolve(process.cwd(), unquoted);
   }
 
-  const result = await runCasegraph(process.argv.slice(2), process.cwd(), {
+  const result = await runCasegraph(process.argv.slice(2), cwd, {
     env: process.env,
-    async approveCreation(request) {
-      if (!process.stdin.isTTY) {
-        return false;
-      }
-
-      const readline = createInterface({
-        input: process.stdin,
-        output: process.stderr,
-      });
-      try {
-        const target =
-          request.type === "createHomeDirectory"
-            ? "case home directory"
-            : "CaseHome root";
-        const answer = await readline.question(
-          `Create ${target}: ${request.path}? [y/N] `,
-        );
-        return /^(y|yes)$/i.test(answer.trim());
-      } finally {
-        readline.close();
-      }
-    },
+    ...createWorkspacePromptCallbacks({
+      cwd,
+      isTTY: process.stdin.isTTY,
+      ask,
+      write(message) {
+        process.stderr.write(message);
+      },
+    }),
     emitProgress(message) {
       process.stderr.write(message);
     },
@@ -526,7 +598,7 @@ async function main(): Promise<void> {
         const answer = await readline.question(
           "Native complaint PDF text was not usable. If you have the original complaint PDF, enter its path now, or press Enter to continue to OCR: ",
         );
-        return normalizePromptedPath(answer);
+        return normalizePromptedPath(answer, cwd);
       } finally {
         readline.close();
       }

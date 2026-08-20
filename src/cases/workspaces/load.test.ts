@@ -91,8 +91,10 @@ describe("loadCaseWorkspace", () => {
       if ("exitCode" in result) return;
       expect(result).toMatchObject({
         caseId,
+        locatorRoot: path.join(workspace.casegraphHome, caseId, "root.yaml"),
         homeDirectory: workspace.homeDirectory,
         homeRoot: workspace.homeRoot,
+        graphRoot: { type: "node", kind: "case", id: "root" },
         packagePath: [],
         resolvedPackagePath: [],
       });
