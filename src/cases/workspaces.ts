@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadCaseWorkspace } from "./workspaces/load.js";
@@ -9,31 +9,6 @@ export type CommandResult = {
   stdout?: string;
   stderr?: string;
 };
-
-export function workspaceDisplayPath(caseId: string): string {
-  return path.posix.join("workspace", caseId);
-}
-
-export function isRootCaseNode(content: string): boolean {
-  return (
-    /^type: "?node"?$/m.test(content) &&
-    /^kind: "?case"?$/m.test(content) &&
-    /^id: "?root"?$/m.test(content)
-  );
-}
-
-export async function pathIsDirectory(filePath: string): Promise<boolean> {
-  try {
-    return (await stat(filePath)).isDirectory();
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
-}
 
 export async function validCaseIds(
   cwd: string,

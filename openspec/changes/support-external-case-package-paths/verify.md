@@ -50,6 +50,10 @@ part of this change and was not applied.
 - No `docs/superpowers/` path exists.
 - No production `src/` match adds managed-write authorization, a legacy root
   parser, or a root compatibility fallback.
+- The semantic search
+  `rg -n "\\b(isRootCaseNode|workspaceDisplayPath|pathIsDirectory)\\b" src test --glob '*.ts'`
+  returned zero matches after removal, confirming the legacy repository-local
+  root helpers are absent rather than retained as unused compatibility code.
 
 ## Known Limitations
 
