@@ -347,23 +347,6 @@ async function writeValidCaseHome(
   return homeDirectory;
 }
 
-async function writeLegacyCourtListenerCaseRoot(
-  workingDirectory: string,
-  caseId: string,
-): Promise<void> {
-  const rootPath = path.join(
-    workingDirectory,
-    "workspace",
-    caseId,
-    "root.yaml",
-  );
-  await mkdir(path.dirname(rootPath), { recursive: true });
-  await writeFile(
-    rootPath,
-    'type: node\nkind: case\nid: root\ncreated_at: "2026-05-12T00:00:00.000Z"\nupdated_at: "2026-05-12T00:00:00.000Z"\n',
-  );
-}
-
 async function writeImportedCaseState(
   workingDirectory: string,
   caseId: string,
@@ -4009,40 +3992,44 @@ describe("casegraph cases import courtlistener", () => {
     }
   });
 
-  test("defaults to dry-run and does not create a workspace", async () => {
+  test("CourtListener dry-run and explicit dry-run need no home", async () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      const result = await runCasegraphInProcess(
-        ["cases", "import", "courtlistener", "10000001"],
-        workingDirectory,
-        {
-          env: { COURTLISTENER_API_TOKEN: "secret-token" },
-          fetch: makeCourtListenerFetch(courtListenerRoutes()),
-        },
-      );
+      for (const flags of [[], ["--dry-run"]]) {
+        const result = await runCasegraphInProcess(
+          ["cases", "import", "courtlistener", "10000001", ...flags],
+          workingDirectory,
+          {
+            env: { COURTLISTENER_API_TOKEN: "secret-token" },
+            fetch: makeCourtListenerFetch(courtListenerRoutes()),
+          },
+        );
 
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(
-        "Derived case ID: example-v-example-city",
-      );
-      expect(result.stdout).toContain("Docket entries: 1");
-      expect(result.stdout).toContain("Dry run only");
-      expect(`${result.stdout ?? ""}\n${result.stderr ?? ""}`).not.toContain(
-        "secret-token",
-      );
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(
+          "Derived case ID: example-v-example-city",
+        );
+        expect(result.stdout).toContain("Docket entries: 1");
+        expect(result.stdout).toContain("Dry run only");
+        expect(`${result.stdout ?? ""}\n${result.stderr ?? ""}`).not.toContain(
+          "secret-token",
+        );
+      }
       await expect(
-        stat(
-          path.join(workingDirectory, "workspace", "example-v-example-city"),
-        ),
+        stat(path.join(workingDirectory, "workspace")),
+      ).rejects.toThrow();
+      await expect(
+        stat(path.join(workingDirectory, ".casegraph")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }
   });
 
-  test("writes imported workspace, history, source refs, and filing-level citations without edges", async () => {
+  test("write import requires a home before CourtListener fetch", async () => {
     const workingDirectory = await makeWorkingDirectory();
+    const fetch = vi.fn(makeCourtListenerFetch(courtListenerRoutes()));
 
     try {
       const result = await runCasegraphInProcess(
@@ -4050,7 +4037,56 @@ describe("casegraph cases import courtlistener", () => {
         workingDirectory,
         {
           env: { COURTLISTENER_API_TOKEN: "secret-token" },
+          fetch,
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
+          approveCreation: () => Promise.resolve(true),
+        },
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("--home <directory> is required");
+      expect(fetch).not.toHaveBeenCalled();
+      await expect(
+        stat(path.join(workingDirectory, "workspace")),
+      ).rejects.toThrow();
+      await expect(
+        stat(path.join(workingDirectory, ".casegraph")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("CourtListener write import uses the selected home and creates matching typed roots", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+    const homeDirectory = path.join(workingDirectory, "selected-home");
+    const homeRoot = path.join(homeDirectory, "root.yaml");
+    const locatorRoot = path.join(
+      workingDirectory,
+      ".casegraph",
+      "example-v-example-city",
+      "root.yaml",
+    );
+    const approveCreation = vi.fn(() => Promise.resolve(false));
+
+    try {
+      const result = await runCasegraphInProcess(
+        [
+          "cases",
+          "import",
+          "courtlistener",
+          "10000001",
+          "--write",
+          "--home",
+          homeDirectory,
+          "--yes",
+        ],
+        workingDirectory,
+        {
+          env: { COURTLISTENER_API_TOKEN: "secret-token" },
           fetch: makeCourtListenerFetch(courtListenerRoutes()),
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
+          approveCreation,
           now: () => new Date("2026-05-12T14:10:03.123Z"),
           createMutationId: () => "ckd9p2xq7a",
           createGraphRecordId: createSequentialIds(
@@ -4063,22 +4099,13 @@ describe("casegraph cases import courtlistener", () => {
           ),
         },
       );
-      const workspacePath = path.join(
-        workingDirectory,
-        "workspace",
-        "example-v-example-city",
-      );
-      const mutationPath = path.join(workspacePath, ".history", "m_ckd9p2xq7a");
-      const root = await readFile(
-        path.join(workspacePath, "root.yaml"),
-        "utf8",
-      );
+      const mutationPath = path.join(homeDirectory, ".history", "m_ckd9p2xq7a");
       const docket = await readFile(
-        path.join(workspacePath, "local01.yaml"),
+        path.join(homeDirectory, "local01.yaml"),
         "utf8",
       );
       const recapDocument = await readFile(
-        path.join(workspacePath, "local06.yaml"),
+        path.join(homeDirectory, "local06.yaml"),
         "utf8",
       );
       const manifest = await readFile(
@@ -4089,17 +4116,43 @@ describe("casegraph cases import courtlistener", () => {
         path.join(mutationPath, "request-docket.yaml"),
         "utf8",
       );
-      const allWorkspaceFiles = await readdir(workspacePath, {
+      const allWorkspaceFiles = await readdir(homeDirectory, {
         recursive: true,
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(
-        "Created case workspace: workspace/example-v-example-city",
-      );
+      expect(approveCreation).not.toHaveBeenCalled();
+      expect(result.stdout).toContain(`Case home: ${homeDirectory}`);
       expect(result.stdout).not.toContain("secret-token");
-      expect(root).toContain('kind: "case"');
-      expect(root).toContain('mutation: "m_ckd9p2xq7a"');
+      await expect(readCaseHome(homeRoot)).resolves.toMatchObject({
+        apiVersion: CASEGRAPH_API_VERSION,
+        kind: "CaseHome",
+        metadata: { name: "example-v-example-city" },
+        spec: {
+          graphRoot: {
+            type: "node",
+            kind: "case",
+            id: "root",
+            sources: [
+              {
+                mutation: "m_ckd9p2xq7a",
+                request: "request-docket",
+                path: "$.response.body",
+                source_system: "courtlistener",
+                source_model: "docket",
+                source_id: "10000001",
+              },
+            ],
+          },
+          packagePath: [],
+        },
+      });
+      await expect(readCaseLocator(locatorRoot)).resolves.toEqual({
+        apiVersion: CASEGRAPH_API_VERSION,
+        kind: "CaseLocator",
+        metadata: { name: "example-v-example-city" },
+        spec: { home: homeRoot },
+      });
       expect(docket).toContain('kind: "docket"');
       expect(docket).toContain('id: "local01"');
       expect(docket).toContain('- "local02"');
@@ -4122,6 +4175,9 @@ describe("casegraph cases import courtlistener", () => {
       expect(requestDocket).toContain('authorization: "redacted"');
       expect(requestDocket).not.toContain("secret-token");
       expect(allWorkspaceFiles.join("\n")).not.toMatch(/edge/i);
+      await expect(
+        stat(path.join(workingDirectory, "workspace")),
+      ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }
@@ -4132,20 +4188,40 @@ describe("casegraph cases import courtlistener", () => {
     const unsafeDirectory = await makeWorkingDirectory();
 
     try {
-      await writeLegacyCourtListenerCaseRoot(
+      const existingHome = await writeValidCaseHome(
         duplicateDirectory,
         "example-v-example-city",
       );
+      const selectedHome = path.join(duplicateDirectory, "selected-home");
       const duplicate = await runCasegraphInProcess(
-        ["cases", "import", "courtlistener", "10000001", "--write"],
+        [
+          "cases",
+          "import",
+          "courtlistener",
+          "10000001",
+          "--write",
+          "--home",
+          selectedHome,
+          "--yes",
+        ],
         duplicateDirectory,
         {
           env: { COURTLISTENER_API_TOKEN: "secret-token" },
           fetch: makeCourtListenerFetch(courtListenerRoutes()),
+          casegraphHome: path.join(duplicateDirectory, ".casegraph"),
         },
       );
       const unsafe = await runCasegraphInProcess(
-        ["cases", "import", "courtlistener", "10000001", "--write"],
+        [
+          "cases",
+          "import",
+          "courtlistener",
+          "10000001",
+          "--write",
+          "--home",
+          path.join(unsafeDirectory, "selected-home"),
+          "--yes",
+        ],
         unsafeDirectory,
         {
           env: { COURTLISTENER_API_TOKEN: "secret-token" },
@@ -4168,13 +4244,14 @@ describe("casegraph cases import courtlistener", () => {
 
       expect(duplicate.exitCode).not.toBe(0);
       expect(duplicate.stderr).toContain("already exists");
-      expect(await readdir(path.join(duplicateDirectory, "workspace"))).toEqual(
-        ["example-v-example-city"],
-      );
+      await expect(
+        readCaseHome(path.join(existingHome, "root.yaml")),
+      ).resolves.toBeDefined();
+      await expect(stat(selectedHome)).rejects.toThrow();
       expect(unsafe.exitCode).not.toBe(0);
       expect(unsafe.stderr).toContain("No safe case ID");
       await expect(
-        stat(path.join(unsafeDirectory, "workspace")),
+        stat(path.join(unsafeDirectory, "selected-home")),
       ).rejects.toThrow();
     } finally {
       await rm(duplicateDirectory, { recursive: true, force: true });
@@ -4184,13 +4261,24 @@ describe("casegraph cases import courtlistener", () => {
 
   test("preserves visible incomplete citation lookup status", async () => {
     const workingDirectory = await makeWorkingDirectory();
+    const homeDirectory = path.join(workingDirectory, "selected-home");
 
     try {
       const result = await runCasegraphInProcess(
-        ["cases", "import", "courtlistener", "10000001", "--write"],
+        [
+          "cases",
+          "import",
+          "courtlistener",
+          "10000001",
+          "--write",
+          "--home",
+          homeDirectory,
+          "--yes",
+        ],
         workingDirectory,
         {
           env: { COURTLISTENER_API_TOKEN: "secret-token" },
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
           fetch: makeCourtListenerFetch(
             courtListenerRoutes({
               "POST https://www.courtlistener.com/api/rest/v4/citation-lookup/":
@@ -4213,19 +4301,12 @@ describe("casegraph cases import courtlistener", () => {
         },
       );
       const recapDocument = await readFile(
-        path.join(
-          workingDirectory,
-          "workspace",
-          "example-v-example-city",
-          "local06.yaml",
-        ),
+        path.join(homeDirectory, "local06.yaml"),
         "utf8",
       );
       const request = await readFile(
         path.join(
-          workingDirectory,
-          "workspace",
-          "example-v-example-city",
+          homeDirectory,
           ".history",
           "m_rate1limit",
           "request-citation-lookup-recap-document-200000001.yaml",

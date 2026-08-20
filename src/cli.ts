@@ -72,8 +72,8 @@ Work with separated case homes.
 Commands:
   new <case-id> --home <directory>
                    Create an external case home
-  import courtlistener <docket-id> [--dry-run | --write]
-                   Bootstrap a case workspace from CourtListener REST
+  import courtlistener <docket-id> [--dry-run | --write] [--home <directory>] [--yes]
+                   Bootstrap a case home from CourtListener REST
   add document <case-id> complaint <path-to-pdf>
                    Record a complaint document node
   add evidence <case-id> <path-to-file>
@@ -110,10 +110,17 @@ function isHelpRequest(args: readonly string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-function importFlags(options: { dryRun?: boolean; write?: boolean }): string[] {
+function importFlags(options: {
+  dryRun?: boolean;
+  write?: boolean;
+  home?: string;
+  yes?: boolean;
+}): string[] {
   return [
     ...(options.dryRun === true ? ["--dry-run"] : []),
     ...(options.write === true ? ["--write"] : []),
+    ...(options.home ? ["--home", options.home] : []),
+    ...(options.yes === true ? ["--yes"] : []),
   ];
 }
 
@@ -384,12 +391,19 @@ export async function runCasegraph(
     .argument("[extra...]")
     .option("--dry-run")
     .option("--write")
+    .option("--home <directory>")
+    .option("--yes")
     .action(
       (
         source: string | undefined,
         docketId: string | undefined,
         extra: string[],
-        options: { dryRun?: boolean; write?: boolean },
+        options: {
+          dryRun?: boolean;
+          write?: boolean;
+          home?: string;
+          yes?: boolean;
+        },
       ) => {
         if (source !== "courtlistener") {
           commandResult = {

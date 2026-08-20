@@ -1,5 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type {
+  CaseGraphRoot,
+  CaseHomeSourceReference,
+} from "../../../workspaces/case-home-document.js";
 import { mappedProperties } from "./mapping.js";
 import {
   localIdForSourceUrl,
@@ -12,7 +16,7 @@ import type {
   ImportedGraphRecordIds,
   SourceRequestRecord,
 } from "./types.js";
-import { graphRecordContent, serializeYaml } from "./yaml.js";
+import { graphRecordContent } from "./yaml.js";
 
 function sourceReference(
   mutationId: string,
@@ -20,7 +24,7 @@ function sourceReference(
   sourceModel: string,
   sourceId: string | number,
   sourcePath: string,
-): Record<string, unknown> {
+): CaseHomeSourceReference {
   return {
     mutation: mutationId,
     request: requestId,
@@ -61,49 +65,21 @@ function citationLookupByRecapDocumentId(
   return lookupByDocumentId;
 }
 
-function importedRootNodeContent(
-  timestamp: string,
-  sources: readonly Record<string, unknown>[],
-): string {
-  return serializeYaml({
-    type: "node",
-    kind: "case",
-    id: "root",
-    created_at: timestamp,
-    updated_at: timestamp,
-    sources,
-  });
-}
-
 export async function writeImportedGraphRecords(
-  workspacePath: string,
+  homeDirectory: string,
   timestamp: string,
   mutationId: string,
   responses: CourtListenerResponses,
   createGraphRecordId: () => string,
   mappings: DocketImportMappings,
-): Promise<void> {
+): Promise<CaseGraphRoot> {
   const recordIds = createImportedGraphRecordIds(
     responses,
     createGraphRecordId,
   );
 
   await writeFile(
-    path.join(workspacePath, "root.yaml"),
-    importedRootNodeContent(timestamp, [
-      sourceReference(
-        mutationId,
-        responses.docketRequest.id,
-        "docket",
-        sourceIdValue(responses.docket.id),
-        "$.response.body",
-      ),
-    ]),
-    { flag: "wx" },
-  );
-
-  await writeFile(
-    path.join(workspacePath, `${recordIds.docket}.yaml`),
+    path.join(homeDirectory, `${recordIds.docket}.yaml`),
     graphRecordContent({
       type: "node",
       kind: mappings.docket.kind,
@@ -130,7 +106,7 @@ export async function writeImportedGraphRecords(
 
   for (const [index, party] of responses.parties.entries()) {
     await writeFile(
-      path.join(workspacePath, `${recordIds.parties[index]}.yaml`),
+      path.join(homeDirectory, `${recordIds.parties[index]}.yaml`),
       graphRecordContent({
         type: "node",
         kind: mappings.party.kind,
@@ -159,7 +135,7 @@ export async function writeImportedGraphRecords(
 
   for (const [index, attorney] of responses.attorneys.entries()) {
     await writeFile(
-      path.join(workspacePath, `${recordIds.attorneys[index]}.yaml`),
+      path.join(homeDirectory, `${recordIds.attorneys[index]}.yaml`),
       graphRecordContent({
         type: "node",
         kind: mappings.attorney.kind,
@@ -188,7 +164,7 @@ export async function writeImportedGraphRecords(
 
   for (const [index, entry] of responses.docketEntries.entries()) {
     await writeFile(
-      path.join(workspacePath, `${recordIds.docketEntries[index]}.yaml`),
+      path.join(homeDirectory, `${recordIds.docketEntries[index]}.yaml`),
       graphRecordContent({
         type: "node",
         kind: mappings.docket_entry.kind,
@@ -247,7 +223,7 @@ export async function writeImportedGraphRecords(
     }
 
     await writeFile(
-      path.join(workspacePath, `${recordIds.recapDocuments[index]}.yaml`),
+      path.join(homeDirectory, `${recordIds.recapDocuments[index]}.yaml`),
       graphRecordContent({
         type: "node",
         kind: mappings.recap_document.kind,
@@ -266,4 +242,19 @@ export async function writeImportedGraphRecords(
       { flag: "wx" },
     );
   }
+
+  return {
+    type: "node",
+    kind: "case",
+    id: "root",
+    sources: [
+      sourceReference(
+        mutationId,
+        responses.docketRequest.id,
+        "docket",
+        sourceIdValue(responses.docket.id),
+        "$.response.body",
+      ),
+    ],
+  };
 }
