@@ -215,6 +215,7 @@ async function runCasegraphWithFixtureAi(
   let result;
   try {
     result = await runCasegraphInProcess(args, cwd, {
+      casegraphHome: path.join(cwd, ".casegraph"),
       env: process.env,
       incidentFromComplaintAiExtractor: fixtureIncidentFromComplaintAiExtractor,
       pdfToMarkdownVisionExtractor: null,
@@ -288,29 +289,26 @@ function aiCacheKey(input: unknown): string {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
-async function writeValidCaseRoot(
+async function writeValidCaseHome(
   workingDirectory: string,
   caseId: string,
-): Promise<void> {
-  const rootPath = path.join(
-    workingDirectory,
-    "workspace",
-    caseId,
-    "root.yaml",
+  options: {
+    graphRootSources?: {
+      mutation: string;
+      request: string;
+      path: string;
+      source_system: string;
+      source_model: string;
+      source_id: string;
+    }[];
+    packagePath?: string[];
+  } = {},
+): Promise<string> {
+  const caseHomesDirectory = path.join(workingDirectory, "case-homes");
+  await mkdir(caseHomesDirectory, { recursive: true });
+  const homeDirectory = await mkdtemp(
+    path.join(caseHomesDirectory, `${caseId}-`),
   );
-  await mkdir(path.dirname(rootPath), { recursive: true });
-  await writeFile(
-    rootPath,
-    'type: node\nkind: case\nid: root\ncreated_at: "2026-05-12T00:00:00.000Z"\nupdated_at: "2026-05-12T00:00:00.000Z"\n',
-  );
-  await writeExternalCaseLocator(workingDirectory, caseId);
-}
-
-async function writeExternalCaseLocator(
-  workingDirectory: string,
-  caseId: string,
-): Promise<void> {
-  const homeDirectory = path.join(workingDirectory, "case-homes", caseId);
   const homeRoot = path.join(homeDirectory, "root.yaml");
   const locatorRoot = path.join(
     workingDirectory,
@@ -327,8 +325,13 @@ async function writeExternalCaseLocator(
       kind: "CaseHome",
       metadata: { name: caseId },
       spec: {
-        graphRoot: { type: "node", kind: "case", id: "root" },
-        packagePath: [],
+        graphRoot: {
+          type: "node",
+          kind: "case",
+          id: "root",
+          sources: options.graphRootSources,
+        },
+        packagePath: options.packagePath ?? [],
         createdAt: "2026-08-20T00:00:00.000Z",
         updatedAt: "2026-08-20T00:00:00.000Z",
       },
@@ -340,18 +343,43 @@ async function writeExternalCaseLocator(
     metadata: { name: caseId },
     spec: { home: homeRoot },
   });
+
+  return homeDirectory;
+}
+
+async function writeLegacyCourtListenerCaseRoot(
+  workingDirectory: string,
+  caseId: string,
+): Promise<void> {
+  const rootPath = path.join(
+    workingDirectory,
+    "workspace",
+    caseId,
+    "root.yaml",
+  );
+  await mkdir(path.dirname(rootPath), { recursive: true });
+  await writeFile(
+    rootPath,
+    'type: node\nkind: case\nid: root\ncreated_at: "2026-05-12T00:00:00.000Z"\nupdated_at: "2026-05-12T00:00:00.000Z"\n',
+  );
 }
 
 async function writeImportedCaseState(
   workingDirectory: string,
   caseId: string,
-): Promise<void> {
-  const workspacePath = path.join(workingDirectory, "workspace", caseId);
-  await mkdir(workspacePath, { recursive: true });
-  await writeFile(
-    path.join(workspacePath, "root.yaml"),
-    'type: "node"\nkind: "case"\nid: "root"\ncreated_at: "2026-05-12T00:00:00.000Z"\nupdated_at: "2026-05-12T00:00:00.000Z"\nsources:\n  - source_system: "courtlistener"\n    source_model: "docket"\n    source_id: "10000001"\n',
-  );
+): Promise<string> {
+  const workspacePath = await writeValidCaseHome(workingDirectory, caseId, {
+    graphRootSources: [
+      {
+        mutation: "m_import-courtlistener-10000001",
+        request: "courtlistener-docket-10000001",
+        path: ".",
+        source_system: "courtlistener",
+        source_model: "docket",
+        source_id: "10000001",
+      },
+    ],
+  });
   await writeFile(
     path.join(workspacePath, "docket-node.yaml"),
     'type: "node"\nkind: "docket"\nid: "docket-node"\ncase_name: "Example v. Example City"\ndocket_entries:\n  - "entry-one"\n  - "entry-two"\nparties:\n  - "party-one"\nattorneys:\n  - "attorney-one"\nrecap_documents:\n  - "document-one"\nsources:\n  - source_system: "courtlistener"\n    source_model: "docket"\n    source_id: "10000001"\n',
@@ -376,22 +404,22 @@ async function writeImportedCaseState(
     path.join(workspacePath, "attorney-one.yaml"),
     'type: "node"\nkind: "attorney"\nid: "attorney-one"\nsources:\n  - source_system: "courtlistener"\n    source_model: "attorney"\n',
   );
-  await writeExternalCaseLocator(workingDirectory, caseId);
+  return workspacePath;
 }
 
 async function writeCaseWithAvailableComplaint(
   workingDirectory: string,
   caseId: string,
 ): Promise<string> {
-  await writeValidCaseRoot(workingDirectory, caseId);
+  const homeDirectory = await writeValidCaseHome(workingDirectory, caseId);
   const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
   await writeMinimalPdf(pdfPath);
   await writeFile(
-    path.join(workingDirectory, "workspace", caseId, "complaint.yaml"),
+    path.join(homeDirectory, "complaint.yaml"),
     `type: node\nkind: document\nid: complaint\ndocument_type: complaint\npath: ${JSON.stringify(pdfPath)}\nplain_text: "On January 15, 2024, Alex Example alleges an encounter with Example City police in Example City, Example State that led to his arrest."\ncreated_at: "2026-05-12T00:00:00.000Z"\nupdated_at: "2026-05-12T00:00:00.000Z"\n`,
   );
 
-  return pdfPath;
+  return homeDirectory;
 }
 
 async function snapshotFiles(directory: string): Promise<Map<string, string>> {
@@ -1006,13 +1034,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeCaseWithAvailableComplaint(
+      const workspacePath = await writeCaseWithAvailableComplaint(
         workingDirectory,
-        "example-v-example-city",
-      );
-      const workspacePath = path.join(
-        workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const before = await snapshotFiles(workspacePath);
@@ -1318,7 +1341,7 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeCaseWithAvailableComplaint(
+      const workspacePath = await writeCaseWithAvailableComplaint(
         workingDirectory,
         "example-v-example-city",
       );
@@ -1328,13 +1351,7 @@ describe("casegraph cases analysis new", () => {
         workingDirectory,
       );
       const analysisEntries = await readdir(
-        path.join(
-          workingDirectory,
-          "workspace",
-          "example-v-example-city",
-          "analysis",
-          "current",
-        ),
+        path.join(workspacePath, "analysis", "current"),
       );
 
       expect(result.exitCode).toBe(0);
@@ -1358,10 +1375,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       await writeFile(
@@ -1470,13 +1485,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeCaseWithAvailableComplaint(
+      const workspacePath = await writeCaseWithAvailableComplaint(
         workingDirectory,
-        "example-v-example-city",
-      );
-      const workspacePath = path.join(
-        workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const currentPath = path.join(workspacePath, "analysis", "current");
@@ -1516,13 +1526,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeCaseWithAvailableComplaint(
+      const workspacePath = await writeCaseWithAvailableComplaint(
         workingDirectory,
-        "example-v-example-city",
-      );
-      const workspacePath = path.join(
-        workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const currentPath = path.join(workspacePath, "analysis", "current");
@@ -1559,10 +1564,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
@@ -1775,10 +1778,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
@@ -1830,10 +1831,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
@@ -1891,20 +1890,18 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeCaseWithAvailableComplaint(
+      const workspacePath = await writeCaseWithAvailableComplaint(
         workingDirectory,
-        "example-v-example-city",
-      );
-      const workspacePath = path.join(
-        workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
 
       const result = await runCasegraphInProcess(
         ["cases", "analysis", "new", "example-v-example-city"],
         workingDirectory,
-        { env: { PATH: "" } },
+        {
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
+          env: { PATH: "" },
+        },
       );
 
       expect(result.exitCode).toBe(1);
@@ -1962,6 +1959,7 @@ describe("casegraph cases analysis new", () => {
         ["cases", "analysis", "new", "example-v-example-city"],
         workingDirectory,
         {
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
           env: {
             CASEGRAPH_OPENAI_TIMEOUT_MS: "50",
             OPENAI_API_KEY: "test-key",
@@ -2012,6 +2010,7 @@ describe("casegraph cases analysis new", () => {
         ["cases", "analysis", "new", "example-v-example-city"],
         workingDirectory,
         {
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
           env: {
             OPENAI_API_KEY: "sk-testsecret1234567890",
           },
@@ -2062,13 +2061,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeCaseWithAvailableComplaint(
+      const workspacePath = await writeCaseWithAvailableComplaint(
         workingDirectory,
-        "example-v-example-city",
-      );
-      const workspacePath = path.join(
-        workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const before = await snapshotFiles(workspacePath);
@@ -2105,10 +2099,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
 
@@ -2133,10 +2125,8 @@ describe("casegraph cases analysis new", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const missingPdfPath = path.join(
@@ -2193,8 +2183,11 @@ describe("casegraph cases analysis new", () => {
         ["cases", "analysis", "new"],
         workingDirectory,
       );
-      await writeValidCaseRoot(workingDirectory, "case-one");
-      await writeValidCaseRoot(workingDirectory, "case-two");
+      const caseOneHome = await writeValidCaseHome(
+        workingDirectory,
+        "case-one",
+      );
+      await writeValidCaseHome(workingDirectory, "case-two");
       const multipleCases = await runCasegraph(
         ["cases", "analysis", "new"],
         workingDirectory,
@@ -2227,7 +2220,7 @@ describe("casegraph cases analysis new", () => {
       );
       expect(missingCase.exitCode).not.toBe(0);
       expect(`${missingCase.stdout}\n${missingCase.stderr}`).toContain(
-        "Case workspace does not exist: workspace/missing-case",
+        path.join(workingDirectory, ".casegraph", "missing-case", "root.yaml"),
       );
       expect(extraToken.exitCode).not.toBe(0);
       expect(`${extraToken.stdout}\n${extraToken.stderr}`).toContain(
@@ -2236,9 +2229,7 @@ describe("casegraph cases analysis new", () => {
       expect(`${extraToken.stdout}\n${extraToken.stderr}`).toContain(
         "Usage: casegraph cases analysis new <case-id>",
       );
-      await expect(
-        stat(path.join(workingDirectory, "workspace", "case-one", "analysis")),
-      ).rejects.toThrow();
+      await expect(stat(path.join(caseOneHome, "analysis"))).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }
@@ -2250,10 +2241,8 @@ describe("casegraph cases report", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeImportedCaseState(workingDirectory, "example-v-example-city");
-      const workspacePath = path.join(
+      const workspacePath = await writeImportedCaseState(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const before = await snapshotFiles(workspacePath);
@@ -2303,7 +2292,7 @@ describe("casegraph cases report", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      await writeValidCaseHome(workingDirectory, "example-v-example-city");
 
       const result = await runCasegraph(
         ["cases", "report", "example-v-example-city"],
@@ -2389,8 +2378,8 @@ describe("casegraph cases report", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "case-one");
-      await writeValidCaseRoot(workingDirectory, "case-two");
+      await writeValidCaseHome(workingDirectory, "case-one");
+      await writeValidCaseHome(workingDirectory, "case-two");
 
       const result = await runCasegraph(["cases", "report"], workingDirectory);
 
@@ -2412,7 +2401,7 @@ describe("casegraph cases report", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      await writeValidCaseHome(workingDirectory, "example-v-example-city");
 
       const missingCase = await runCasegraph(
         ["cases", "report", "missing-case"],
@@ -2425,7 +2414,7 @@ describe("casegraph cases report", () => {
 
       expect(missingCase.exitCode).not.toBe(0);
       expect(`${missingCase.stdout}\n${missingCase.stderr}`).toContain(
-        "Case workspace does not exist: workspace/missing-case",
+        path.join(workingDirectory, ".casegraph", "missing-case", "root.yaml"),
       );
       expect(extraToken.exitCode).not.toBe(0);
       expect(`${extraToken.stdout}\n${extraToken.stderr}`).toContain(
@@ -2435,6 +2424,146 @@ describe("casegraph cases report", () => {
         "Usage: casegraph cases report <case-id>",
       );
       expect(extraToken.stdout).toBe("");
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("external case home operation validation", () => {
+  const caseId = "example-v-example-city";
+
+  async function caseWithMissingPackagePath(
+    workingDirectory: string,
+  ): Promise<{ homeDirectory: string; missingPackagePath: string }> {
+    const missingPackagePath = path.join(
+      workingDirectory,
+      "missing-package-path",
+    );
+    const homeDirectory = await writeValidCaseHome(workingDirectory, caseId, {
+      packagePath: [missingPackagePath],
+    });
+
+    return { homeDirectory, missingPackagePath };
+  }
+
+  function expectPackagePathFailure(
+    result: CliResult,
+    homeDirectory: string,
+    missingPackagePath: string,
+  ): void {
+    expect(result.exitCode).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      `Package path does not exist for case ${caseId}`,
+    );
+    expect(`${result.stdout}\n${result.stderr}`).toContain(missingPackagePath);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      path.join(homeDirectory, "root.yaml"),
+    );
+  }
+
+  test("add document package path blocks operation before write", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+
+    try {
+      const { homeDirectory, missingPackagePath } =
+        await caseWithMissingPackagePath(workingDirectory);
+      const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
+      await writeMinimalPdf(pdfPath);
+
+      const result = await runCasegraph(
+        ["cases", "add", "document", caseId, "complaint", pdfPath],
+        workingDirectory,
+      );
+
+      expectPackagePathFailure(result, homeDirectory, missingPackagePath);
+      await expect(
+        stat(path.join(homeDirectory, "complaint.yaml")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("add evidence package path blocks operation before write", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+
+    try {
+      const { homeDirectory, missingPackagePath } =
+        await caseWithMissingPackagePath(workingDirectory);
+      const evidencePath = path.join(workingDirectory, "records", "notes.txt");
+      await writeEvidenceFile(evidencePath);
+
+      const result = await runCasegraph(
+        ["cases", "add", "evidence", caseId, evidencePath],
+        workingDirectory,
+      );
+
+      expectPackagePathFailure(result, homeDirectory, missingPackagePath);
+      await expect(
+        stat(path.join(homeDirectory, `${evidenceFileSha256}.yaml`)),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("analysis new package path blocks operation before write", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+
+    try {
+      const { homeDirectory, missingPackagePath } =
+        await caseWithMissingPackagePath(workingDirectory);
+
+      const result = await runCasegraph(
+        ["cases", "analysis", "new", caseId],
+        workingDirectory,
+      );
+
+      expectPackagePathFailure(result, homeDirectory, missingPackagePath);
+      await expect(
+        stat(path.join(homeDirectory, "analysis")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("analysis resume package path blocks operation before write", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+
+    try {
+      const { homeDirectory, missingPackagePath } =
+        await caseWithMissingPackagePath(workingDirectory);
+
+      const result = await runCasegraph(
+        ["cases", "analysis", "resume", caseId],
+        workingDirectory,
+      );
+
+      expectPackagePathFailure(result, homeDirectory, missingPackagePath);
+      await expect(
+        stat(path.join(homeDirectory, "analysis")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("report package path blocks operation before read", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+
+    try {
+      const { homeDirectory, missingPackagePath } =
+        await caseWithMissingPackagePath(workingDirectory);
+
+      const result = await runCasegraph(
+        ["cases", "report", caseId],
+        workingDirectory,
+      );
+
+      expectPackagePathFailure(result, homeDirectory, missingPackagePath);
+      expect(result.stdout).not.toContain("Legal docket:");
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }
@@ -2906,14 +3035,12 @@ describe("casegraph cases add evidence", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
-      const evidencePath = path.join(workingDirectory, "records", "notes.txt");
-      await writeEvidenceFile(evidencePath);
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
+      const evidencePath = path.join(workingDirectory, "records", "notes.txt");
+      await writeEvidenceFile(evidencePath);
 
       const result = await runCasegraph(
         ["cases", "add", "evidence", "example-v-example-city", evidencePath],
@@ -2969,7 +3096,7 @@ describe("casegraph cases add evidence", () => {
       expect(new Date(createdAt ?? "").toISOString()).toBe(createdAt);
       expect(evidence).not.toContain("null");
       expect(result.stdout).toContain(
-        `Created evidence node: workspace/example-v-example-city/${evidenceId}.yaml`,
+        `Created evidence node: ${path.join(workspacePath, `${evidenceId}.yaml`)}`,
       );
       expect(result.stdout).toContain(`Evidence node ID: ${evidenceId}`);
       expect(result.stdout).toContain(
@@ -3004,7 +3131,10 @@ describe("casegraph cases add evidence", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+      );
       const evidencePath = path.join(workingDirectory, "records", "notes.txt");
       await writeEvidenceFile(evidencePath);
 
@@ -3012,9 +3142,7 @@ describe("casegraph cases add evidence", () => {
         ["cases", "add", "evidence", evidencePath],
         workingDirectory,
       );
-      const workspaceEntries = await readdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-      );
+      const workspaceEntries = await readdir(workspacePath);
 
       expect(result.exitCode).toBe(0);
       expect(
@@ -3040,7 +3168,10 @@ describe("casegraph cases add evidence", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+      );
       const firstEvidencePath = path.join(
         workingDirectory,
         "records",
@@ -3074,14 +3205,12 @@ describe("casegraph cases add evidence", () => {
         ],
         workingDirectory,
       );
-      const workspaceEntries = await readdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-      );
+      const workspaceEntries = await readdir(workspacePath);
 
       expect(firstResult.exitCode).toBe(0);
       expect(duplicateResult.exitCode).not.toBe(0);
       expect(`${duplicateResult.stdout}\n${duplicateResult.stderr}`).toContain(
-        `Evidence already exists: workspace/example-v-example-city/${evidenceFileSha256}.yaml`,
+        `Evidence already exists: ${path.join(workspacePath, `${evidenceFileSha256}.yaml`)}`,
       );
       expect(
         workspaceEntries.filter(
@@ -3104,8 +3233,8 @@ describe("casegraph cases add evidence", () => {
         ["cases", "add", "evidence", evidencePath],
         workingDirectory,
       );
-      await writeValidCaseRoot(workingDirectory, "case-one");
-      await writeValidCaseRoot(workingDirectory, "case-two");
+      await writeValidCaseHome(workingDirectory, "case-one");
+      await writeValidCaseHome(workingDirectory, "case-two");
       const multipleCases = await runCasegraph(
         ["cases", "add", "evidence", evidencePath],
         workingDirectory,
@@ -3140,7 +3269,10 @@ describe("casegraph cases add evidence", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+      );
       const evidencePath = path.join(workingDirectory, "records", "notes.txt");
       const missingPath = path.join(workingDirectory, "records", "missing.txt");
       const directoryPath = path.join(workingDirectory, "records", "folder");
@@ -3189,7 +3321,7 @@ describe("casegraph cases add evidence", () => {
       );
       expect(missingCase.exitCode).not.toBe(0);
       expect(`${missingCase.stdout}\n${missingCase.stderr}`).toContain(
-        "Case workspace does not exist: workspace/missing-case",
+        path.join(workingDirectory, ".casegraph", "missing-case", "root.yaml"),
       );
       expect(extraToken.exitCode).not.toBe(0);
       expect(`${extraToken.stdout}\n${extraToken.stderr}`).toContain(
@@ -3198,9 +3330,7 @@ describe("casegraph cases add evidence", () => {
       expect(`${extraToken.stdout}\n${extraToken.stderr}`).toContain(
         "Usage: casegraph cases add evidence <case-id> <path-to-file>",
       );
-      const workspaceEntries = await readdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-      );
+      const workspaceEntries = await readdir(workspacePath);
       expect(workspaceEntries).toEqual(["root.yaml"]);
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3213,7 +3343,10 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+      );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
       await writeMinimalPdf(pdfPath);
 
@@ -3221,18 +3354,11 @@ describe("casegraph cases add document", () => {
         ["cases", "add", "document", "complaint", pdfPath],
         workingDirectory,
       );
-      const complaintPath = path.join(
-        workingDirectory,
-        "workspace",
-        "example-v-example-city",
-        "complaint.yaml",
-      );
+      const complaintPath = path.join(workspacePath, "complaint.yaml");
       const complaint = await readFile(complaintPath, "utf8");
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(
-        "workspace/example-v-example-city/complaint.yaml",
-      );
+      expect(result.stdout).toContain(complaintPath);
       expect(complaint).toContain("type: node\n");
       expect(complaint).toContain("kind: document\n");
       expect(complaint).toContain("id: complaint\n");
@@ -3251,21 +3377,24 @@ describe("casegraph cases add document", () => {
     }
   });
 
-  test("does not count stray workspace directories or invalid root nodes as valid cases", async () => {
+  test("does not count invalid locator or home candidates as valid cases", async () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await mkdir(path.join(workingDirectory, "workspace", "stray-folder"), {
+      await mkdir(path.join(workingDirectory, ".casegraph", "stray-folder"), {
         recursive: true,
       });
-      await mkdir(path.join(workingDirectory, "workspace", "not-a-case"), {
+      await mkdir(path.join(workingDirectory, ".casegraph", "not-a-case"), {
         recursive: true,
       });
       await writeFile(
-        path.join(workingDirectory, "workspace", "not-a-case", "root.yaml"),
+        path.join(workingDirectory, ".casegraph", "not-a-case", "root.yaml"),
         "type: node\nkind: note\nid: root\n",
       );
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+      );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
       await writeMinimalPdf(pdfPath);
 
@@ -3276,13 +3405,13 @@ describe("casegraph cases add document", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(
-        "workspace/example-v-example-city/complaint.yaml",
+        path.join(workspacePath, "complaint.yaml"),
       );
       await expect(
         stat(
           path.join(
             workingDirectory,
-            "workspace",
+            ".casegraph",
             "stray-folder",
             "complaint.yaml",
           ),
@@ -3292,7 +3421,7 @@ describe("casegraph cases add document", () => {
         stat(
           path.join(
             workingDirectory,
-            "workspace",
+            ".casegraph",
             "not-a-case",
             "complaint.yaml",
           ),
@@ -3308,7 +3437,7 @@ describe("casegraph cases add document", () => {
 
     try {
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
-      await mkdir(path.join(workingDirectory, "workspace", "stray-folder"), {
+      await mkdir(path.join(workingDirectory, ".casegraph", "stray-folder"), {
         recursive: true,
       });
       await writeMinimalPdf(pdfPath);
@@ -3327,7 +3456,7 @@ describe("casegraph cases add document", () => {
         stat(
           path.join(
             workingDirectory,
-            "workspace",
+            ".casegraph",
             "stray-folder",
             "complaint.yaml",
           ),
@@ -3342,8 +3471,14 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "case-one");
-      await writeValidCaseRoot(workingDirectory, "case-two");
+      const caseOneHome = await writeValidCaseHome(
+        workingDirectory,
+        "case-one",
+      );
+      const caseTwoHome = await writeValidCaseHome(
+        workingDirectory,
+        "case-two",
+      );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
       await writeMinimalPdf(pdfPath);
 
@@ -3362,24 +3497,10 @@ describe("casegraph cases add document", () => {
         "provide <case-id> explicitly",
       );
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "case-one",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(caseOneHome, "complaint.yaml")),
       ).rejects.toThrow();
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "case-two",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(caseTwoHome, "complaint.yaml")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3403,12 +3524,18 @@ describe("casegraph cases add document", () => {
       await writeMinimalPdf(firstPdfPath);
       await writeMinimalPdf(secondPdfPath);
 
-      await writeValidCaseRoot(workingDirectory, "case-one");
+      const caseOneHome = await writeValidCaseHome(
+        workingDirectory,
+        "case-one",
+      );
       const addFirstComplaint = await runCasegraph(
         ["cases", "add", "document", "complaint", firstPdfPath],
         workingDirectory,
       );
-      await writeValidCaseRoot(workingDirectory, "case-two");
+      const caseTwoHome = await writeValidCaseHome(
+        workingDirectory,
+        "case-two",
+      );
       const addSecondComplaint = await runCasegraph(
         ["cases", "add", "document", "complaint", secondPdfPath],
         workingDirectory,
@@ -3423,26 +3550,10 @@ describe("casegraph cases add document", () => {
         `${addSecondComplaint.stdout}\n${addSecondComplaint.stderr}`,
       ).toContain("provide <case-id> explicitly");
       expect(
-        (
-          await stat(
-            path.join(
-              workingDirectory,
-              "workspace",
-              "case-one",
-              "complaint.yaml",
-            ),
-          )
-        ).isFile(),
+        (await stat(path.join(caseOneHome, "complaint.yaml"))).isFile(),
       ).toBe(true);
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "case-two",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(caseTwoHome, "complaint.yaml")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3453,7 +3564,10 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(workingDirectory, "example-v-example-city");
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
+      );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
       await writeMinimalPdf(pdfPath);
 
@@ -3470,14 +3584,7 @@ describe("casegraph cases add document", () => {
         "Usage: casegraph cases add document <case-id> complaint <path-to-pdf>",
       );
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "example-v-example-city",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(workspacePath, "complaint.yaml")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3488,11 +3595,9 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await mkdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-        {
-          recursive: true,
-        },
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
       );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
       await writeMinimalPdf(pdfPath);
@@ -3508,18 +3613,11 @@ describe("casegraph cases add document", () => {
         ],
         workingDirectory,
       );
-      const complaintPath = path.join(
-        workingDirectory,
-        "workspace",
-        "example-v-example-city",
-        "complaint.yaml",
-      );
+      const complaintPath = path.join(workspacePath, "complaint.yaml");
       const complaint = await readFile(complaintPath, "utf8");
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(
-        "workspace/example-v-example-city/complaint.yaml",
-      );
+      expect(result.stdout).toContain(complaintPath);
       expect(result.stdout).toContain("casegraph cases augment");
       expect(result.stdout).toContain("directly referenced");
       expect(result.stdout).toContain("not yet in the graph");
@@ -3539,13 +3637,11 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      const workspacePath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
       );
       const pdfPath = path.join(workingDirectory, "records", "complaint.pdf");
-      await mkdir(workspacePath, { recursive: true });
       await writeMinimalPdf(pdfPath);
 
       const result = await runCasegraph(
@@ -3561,7 +3657,10 @@ describe("casegraph cases add document", () => {
       );
 
       expect(result.exitCode).toBe(0);
-      expect(await readdir(workspacePath)).toEqual(["complaint.yaml"]);
+      expect(await readdir(workspacePath)).toEqual([
+        "complaint.yaml",
+        "root.yaml",
+      ]);
       await expect(
         stat(path.join(workspacePath, "complaint.pdf")),
       ).rejects.toThrow();
@@ -3585,11 +3684,9 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await mkdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-        {
-          recursive: true,
-        },
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
       );
       const recordsPath = path.join(workingDirectory, "records");
       const missingPdfPath = path.join(recordsPath, "missing.pdf");
@@ -3645,14 +3742,7 @@ describe("casegraph cases add document", () => {
         "Only PDF files are supported",
       );
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "example-v-example-city",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(workspacePath, "complaint.yaml")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3663,11 +3753,9 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await mkdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-        {
-          recursive: true,
-        },
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
       );
 
       const result = await runCasegraph(
@@ -3687,14 +3775,7 @@ describe("casegraph cases add document", () => {
         "Only complaint documents are supported",
       );
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "example-v-example-city",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(workspacePath, "complaint.yaml")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3705,11 +3786,9 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      await mkdir(
-        path.join(workingDirectory, "workspace", "example-v-example-city"),
-        {
-          recursive: true,
-        },
+      const workspacePath = await writeValidCaseHome(
+        workingDirectory,
+        "example-v-example-city",
       );
 
       const missingDocumentType = await runCasegraph(
@@ -3743,14 +3822,7 @@ describe("casegraph cases add document", () => {
         "Unexpected add document argument: extra",
       );
       await expect(
-        stat(
-          path.join(
-            workingDirectory,
-            "workspace",
-            "example-v-example-city",
-            "complaint.yaml",
-          ),
-        ),
+        stat(path.join(workspacePath, "complaint.yaml")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3775,10 +3847,10 @@ describe("casegraph cases add document", () => {
 
       expect(result.exitCode).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain(
-        "Case workspace does not exist",
+        path.join(workingDirectory, ".casegraph", "missing-case", "root.yaml"),
       );
       await expect(
-        stat(path.join(workingDirectory, "workspace", "missing-case")),
+        stat(path.join(workingDirectory, ".casegraph", "missing-case")),
       ).rejects.toThrow();
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -3789,13 +3861,11 @@ describe("casegraph cases add document", () => {
     const workingDirectory = await makeWorkingDirectory();
 
     try {
-      const complaintPath = path.join(
+      const workspacePath = await writeValidCaseHome(
         workingDirectory,
-        "workspace",
         "example-v-example-city",
-        "complaint.yaml",
       );
-      await mkdir(path.dirname(complaintPath), { recursive: true });
+      const complaintPath = path.join(workspacePath, "complaint.yaml");
       await writeFile(
         complaintPath,
         "type: node\nkind: document\nid: complaint\n",
@@ -4005,7 +4075,10 @@ describe("casegraph cases import courtlistener", () => {
     const unsafeDirectory = await makeWorkingDirectory();
 
     try {
-      await writeValidCaseRoot(duplicateDirectory, "example-v-example-city");
+      await writeLegacyCourtListenerCaseRoot(
+        duplicateDirectory,
+        "example-v-example-city",
+      );
       const duplicate = await runCasegraphInProcess(
         ["cases", "import", "courtlistener", "10000001", "--write"],
         duplicateDirectory,

@@ -276,6 +276,7 @@ export async function runCasegraph(
           "document",
           commandArguments(caseIdOrType, typeOrPath, documentPath, extra),
           cwd,
+          runtime,
         );
       },
     );
@@ -295,6 +296,7 @@ export async function runCasegraph(
         commandResult = await runAddEvidenceCommand(
           commandArguments(caseIdOrPath, evidencePath, extra),
           cwd,
+          runtime,
         );
       },
     );
@@ -343,6 +345,7 @@ export async function runCasegraph(
       commandResult = await runReportCommand(
         caseId ? [caseId, ...extra] : extra,
         cwd,
+        runtime,
       );
     });
 

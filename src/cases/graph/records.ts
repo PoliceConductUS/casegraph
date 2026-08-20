@@ -8,7 +8,7 @@ const SourceSchema = z.looseObject({
   is_available: z.string().optional(),
   source_system: z.string().optional(),
   source_model: z.string().optional(),
-  source_id: z.string().optional(),
+  source_id: z.union([z.string(), z.number()]).optional(),
   source_url: z.string().optional(),
 });
 
@@ -298,18 +298,23 @@ function parseGraphNodeYaml(content: string): unknown {
 }
 
 export async function readGraphNodes(
-  workspacePath: string,
+  homeDirectory: string,
+  rootNode: CaseNode,
 ): Promise<ParsedGraphNode[]> {
-  const entries = await readdir(workspacePath, { withFileTypes: true });
-  const parsedNodes: ParsedGraphNode[] = [];
+  const entries = await readdir(homeDirectory, { withFileTypes: true });
+  const parsedNodes: ParsedGraphNode[] = [{ fileStem: "root", node: rootNode }];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) {
+    if (
+      !entry.isFile() ||
+      !entry.name.endsWith(".yaml") ||
+      entry.name === "root.yaml"
+    ) {
       continue;
     }
 
     const content = await readFile(
-      path.join(workspacePath, entry.name),
+      path.join(homeDirectory, entry.name),
       "utf8",
     );
     const parseResult = GraphNodeSchema.safeParse(parseGraphNodeYaml(content));

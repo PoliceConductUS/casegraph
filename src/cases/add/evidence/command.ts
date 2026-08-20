@@ -1,15 +1,11 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createReadStream } from "node:fs";
-import { access, readFile, stat, writeFile } from "node:fs/promises";
+import { access, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  isRootCaseNode,
-  pathIsDirectory,
-  resolveOnlyCaseId,
-  validCaseIds,
-  workspaceDisplayPath,
-} from "../../workspaces.js";
+import { resolveOnlyCaseId, validCaseIds } from "../../workspaces.js";
+import type { WorkspaceRuntime } from "../../workspaces/create.js";
+import { loadCaseWorkspace } from "../../workspaces/load.js";
 import { writeEvidenceHistory } from "./history.js";
 
 export type CommandResult = {
@@ -33,25 +29,6 @@ function unexpectedAddEvidenceArgument(argument: string): CommandResult {
     exitCode: 1,
     stderr: `Unexpected add evidence argument: ${argument}\n\n${casesAddEvidenceHelp}`,
   };
-}
-
-async function validCaseWorkspace(workspacePath: string): Promise<boolean> {
-  if (!(await pathIsDirectory(workspacePath))) {
-    return false;
-  }
-
-  try {
-    return isRootCaseNode(
-      await readFile(path.join(workspacePath, "root.yaml"), "utf8"),
-    );
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
 }
 
 async function validateReadableFile(
@@ -129,16 +106,15 @@ async function addEvidence(
   caseId: string,
   evidencePath: string,
   cwd: string,
+  runtime: WorkspaceRuntime,
 ): Promise<CommandResult> {
-  const displayWorkspacePath = workspaceDisplayPath(caseId);
-  const workspacePath = path.join(cwd, "workspace", caseId);
-
-  if (!(await validCaseWorkspace(workspacePath))) {
-    return {
-      exitCode: 1,
-      stderr: `Case workspace does not exist: ${displayWorkspacePath}\n`,
-    };
+  const resolved = await loadCaseWorkspace(caseId, cwd, runtime, {
+    requireWritableHome: true,
+  });
+  if ("exitCode" in resolved) {
+    return resolved;
   }
+  const workspacePath = resolved.homeDirectory;
 
   const validationError = await validateReadableFile(evidencePath);
   if (validationError) {
@@ -147,10 +123,6 @@ async function addEvidence(
 
   const evidenceId = await sha256Hex(evidencePath);
   const evidenceFilePath = path.join(workspacePath, `${evidenceId}.yaml`);
-  const evidenceDisplayPath = path.posix.join(
-    displayWorkspacePath,
-    `${evidenceId}.yaml`,
-  );
   const timestamp = new Date().toISOString();
   const mutationId = `m_${evidenceId}`;
 
@@ -165,7 +137,7 @@ async function addEvidence(
     if (nodeError.code === "EEXIST") {
       return {
         exitCode: 1,
-        stderr: `Evidence already exists: ${evidenceDisplayPath}\n`,
+        stderr: `Evidence already exists: ${evidenceFilePath}\n`,
       };
     }
 
@@ -184,34 +156,35 @@ async function addEvidence(
 
   return {
     exitCode: 0,
-    stdout: `Created evidence node: ${evidenceDisplayPath}\nEvidence node ID: ${evidenceId}\nNext: run casegraph cases report ${caseId} to inspect remaining gaps.\n`,
+    stdout: `Created evidence node: ${evidenceFilePath}\nEvidence node ID: ${evidenceId}\nNext: run casegraph cases report ${caseId} to inspect remaining gaps.\n`,
   };
 }
 
 export async function runAddEvidenceCommand(
   evidenceArgs: readonly string[],
   cwd: string,
+  runtime: WorkspaceRuntime,
 ): Promise<CommandResult> {
   if (evidenceArgs.length === 1) {
     const [evidencePath] = evidenceArgs;
-    const caseIds = await validCaseIds(cwd);
+    const caseIds = await validCaseIds(cwd, runtime);
 
     if (caseIds.includes(evidencePath)) {
       return { exitCode: 1, stderr: casesAddEvidenceHelp };
     }
 
-    const resolvedCaseId = await resolveOnlyCaseId(cwd);
+    const resolvedCaseId = await resolveOnlyCaseId(cwd, runtime);
 
     if (typeof resolvedCaseId !== "string") {
       return resolvedCaseId;
     }
 
-    return addEvidence(resolvedCaseId, evidencePath, cwd);
+    return addEvidence(resolvedCaseId, evidencePath, cwd, runtime);
   }
 
   if (evidenceArgs.length === 2) {
     const [caseId, evidencePath] = evidenceArgs;
-    return addEvidence(caseId, evidencePath, cwd);
+    return addEvidence(caseId, evidencePath, cwd, runtime);
   }
 
   if (evidenceArgs.length > 2) {
