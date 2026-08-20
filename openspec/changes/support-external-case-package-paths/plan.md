@@ -224,6 +224,30 @@ or writing; package-path changes flow only through the `CaseHome` writer.
     approveCreation?: (request: CreationRequest) => Promise<boolean>;
   };
 
+  export type PreparedCaseHome = {
+    caseId: string;
+    homeDirectory: string;
+    homeRoot: string;
+    locatorRoot: string;
+    existingHome?: CaseHome;
+  };
+
+  export async function prepareCaseHome(
+    input: {
+      caseId: string;
+      cwd: string;
+      home: string;
+      yes: boolean;
+      existingHome: "attach" | "reject";
+    },
+    runtime?: WorkspaceRuntime,
+  ): Promise<PreparedCaseHome | CommandResult>;
+
+  export async function registerCaseHome(
+    prepared: PreparedCaseHome,
+    newHome?: CaseHome,
+  ): Promise<void>;
+
   export async function createCaseWorkspace(
     input: {
       caseId: string;
@@ -276,8 +300,12 @@ or writing; package-path changes flow only through the `CaseHome` writer.
   }
   ```
 
-  Register the locator only after `readCaseHome` validates the selected root.
-  Existing matching `CaseHome` files are read and attached without rewriting.
+  `prepareCaseHome` owns the directory, root-state, prompt, and collision
+  checks. `registerCaseHome` owns final `CaseHome` validation and locator
+  creation, and creates the locator only after `readCaseHome` validates the
+  selected root. `createCaseWorkspace` composes them with
+  `existingHome: "attach"`. Existing matching `CaseHome` files are read and
+  attached without rewriting.
 
 - [ ] **Step 4: Wire exact CLI arguments and output**
 
@@ -600,8 +628,8 @@ or writing; package-path changes flow only through the `CaseHome` writer.
 
 **Interfaces:**
 
-- Consumes: `WorkspaceRuntime`, typed writers, and the explicit-home creation
-  checks.
+- Consumes: `WorkspaceRuntime`, typed writers, `prepareCaseHome` with
+  `existingHome: "reject"`, and `registerCaseHome`.
 - `writeImportedGraphRecords` no longer writes `root.yaml`; it writes only
   non-root graph records and returns the strict `CaseGraphRoot` source data the
   `CaseHome` writer receives.
@@ -633,11 +661,12 @@ or writing; package-path changes flow only through the `CaseHome` writer.
 
 - [ ] **Step 4: Write import data under the selected home**
 
-  After fetch and case-ID derivation, perform the same selected-directory and
-  locator collision checks used by `cases new`. Write mutation history and
-  non-root graph records into the prepared home. Then create the `CaseHome`
-  through its sole writer with the imported source references in
-  `spec.graphRoot`, validate it, and create the `CaseLocator` last.
+  After fetch and case-ID derivation, call `prepareCaseHome` so the import uses
+  the exact selected-directory, prompt, and locator-collision checks used by
+  `cases new`. Write mutation history and non-root graph records into the
+  prepared home. Then call `registerCaseHome` with a new `CaseHome` containing
+  the imported source references in `spec.graphRoot`; it validates the home and
+  creates the `CaseLocator` last.
 
   A failure before locator creation must report the partially written selected
   home and must not delete user-approved files automatically.
