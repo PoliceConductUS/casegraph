@@ -25,9 +25,10 @@ import {
 import type { CourtListenerImportRuntime } from "./cases/import/courtlistener/docket/types.js";
 import {
   casesNewHelp,
-  createCaseWorkspace,
   extraCaseIdArgumentsResult,
+  runNewCaseCommand,
 } from "./cases/new/command.js";
+import type { WorkspaceRuntime } from "./cases/workspaces/create.js";
 import { casesReportHelp, runReportCommand } from "./cases/report/command.js";
 import { Command } from "commander";
 
@@ -37,11 +38,13 @@ type CommandResult = {
   stderr?: string;
 };
 
-type Runtime = CourtListenerImportRuntime & AnalysisNewRuntime;
+type Runtime = CourtListenerImportRuntime &
+  AnalysisNewRuntime &
+  WorkspaceRuntime;
 
 const rootHelp = `Usage: casegraph <command>
 
-CaseGraph creates separated repo-local case workspaces for personal case analysis.
+CaseGraph creates separated case homes for personal case analysis.
 
 Commands:
   cases    Work with case workspaces
@@ -51,10 +54,11 @@ Run "casegraph cases --help" for case workspace commands.
 
 const casesHelp = `Usage: casegraph cases <command>
 
-Work with separated case workspaces.
+Work with separated case homes.
 
 Commands:
-  new <case-id>    Create a repo-local case workspace
+  new <case-id> --home <directory>
+                   Create an external case home
   import courtlistener <docket-id> [--dry-run | --write]
                    Bootstrap a case workspace from CourtListener REST
   add document <case-id> complaint <path-to-pdf>
@@ -238,12 +242,28 @@ export async function runCasegraph(
     .helpOption(false)
     .argument("[caseId]")
     .argument("[extra...]")
-    .action(async (caseId: string | undefined, extra: string[]) => {
-      commandResult =
-        extra.length > 0
-          ? extraCaseIdArgumentsResult([caseId ?? "", ...extra])
-          : await createCaseWorkspace(caseId ?? "", cwd);
-    });
+    .requiredOption("--home <directory>")
+    .option("--yes")
+    .action(
+      async (
+        caseId: string | undefined,
+        extra: string[],
+        options: { home?: string; yes?: boolean },
+      ) => {
+        commandResult =
+          extra.length > 0
+            ? extraCaseIdArgumentsResult([caseId ?? "", ...extra])
+            : await runNewCaseCommand(
+                {
+                  caseId: caseId ?? "",
+                  cwd,
+                  home: options.home,
+                  yes: options.yes === true,
+                },
+                runtime,
+              );
+      },
+    );
 
   const addCommand = casesCommand.command("add").helpOption(false);
 
@@ -373,6 +393,28 @@ async function main(): Promise<void> {
 
   const result = await runCasegraph(process.argv.slice(2), process.cwd(), {
     env: process.env,
+    async approveCreation(request) {
+      if (!process.stdin.isTTY) {
+        return false;
+      }
+
+      const readline = createInterface({
+        input: process.stdin,
+        output: process.stderr,
+      });
+      try {
+        const target =
+          request.type === "createHomeDirectory"
+            ? "case home directory"
+            : "CaseHome root";
+        const answer = await readline.question(
+          `Create ${target}: ${request.path}? [y/N] `,
+        );
+        return /^(y|yes)$/i.test(answer.trim());
+      } finally {
+        readline.close();
+      }
+    },
     emitProgress(message) {
       process.stderr.write(message);
     },

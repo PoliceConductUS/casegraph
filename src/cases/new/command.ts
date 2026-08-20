@@ -1,21 +1,17 @@
-import { constants } from "node:fs";
-import { access, mkdir, readdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import {
+  createCaseWorkspace,
+  type WorkspaceRuntime,
+} from "../workspaces/create.js";
+import type { CommandResult } from "../workspaces.js";
 
-export type CommandResult = {
-  exitCode: number;
-  stdout?: string;
-  stderr?: string;
-};
+export const casesNewHelp = `Usage: casegraph cases new <case-id> --home <directory> [--yes]
 
-export const casesNewHelp = `Usage: casegraph cases new <case-id>
-
-Create a repo-local case workspace at workspace/<case-id>.
+Create a CaseHome package in an explicit external directory.
 
 Use this when starting analysis for a case that needs its own graph and notes.
-Case workspaces are separated by case ID.
+Case homes are separated by case ID and registered on this machine.
 Case IDs must use letters, numbers, hyphens, and underscores.
-Case workspaces may be checked into this repository.
+CaseGraph asks before creating a missing home directory or root.yaml.
 `;
 
 const validCaseIdPattern = /^[A-Za-z0-9_-]+$/;
@@ -43,35 +39,6 @@ const windowsReservedDeviceNames = new Set([
   "LPT8",
   "LPT9",
 ]);
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath, constants.F_OK);
-    return true;
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
-}
-
-function workspaceDisplayPath(caseId: string): string {
-  return path.posix.join("workspace", caseId);
-}
-
-function rootNodeContent(timestamp: string): string {
-  return [
-    "type: node",
-    "kind: case",
-    "id: root",
-    `created_at: "${timestamp}"`,
-    `updated_at: "${timestamp}"`,
-    "",
-  ].join("\n");
-}
 
 function suggestCaseId(caseId: string): string | undefined {
   const suggestion = caseId
@@ -101,7 +68,7 @@ function isValidCaseId(caseId: string): boolean {
 function invalidCaseIdResult(caseId: string): CommandResult {
   const suggestion = suggestCaseId(caseId);
   const suggestionText = suggestion
-    ? `\nSuggested case ID: ${suggestion}\n\nRun:\n  casegraph cases new ${suggestion}\n`
+    ? `\nSuggested case ID: ${suggestion}\n\nRun:\n  casegraph cases new ${suggestion} --home <directory>\n`
     : "\n";
 
   return {
@@ -115,7 +82,7 @@ export function extraCaseIdArgumentsResult(
 ): CommandResult {
   const suggestion = suggestCaseId(caseIdParts.join(" "));
   const suggestionText = suggestion
-    ? `\nSuggested case ID: ${suggestion}\n\nRun:\n  casegraph cases new ${suggestion}\n`
+    ? `\nSuggested case ID: ${suggestion}\n\nRun:\n  casegraph cases new ${suggestion} --home <directory>\n`
     : "\n";
 
   return {
@@ -124,31 +91,16 @@ export function extraCaseIdArgumentsResult(
   };
 }
 
-async function caseInsensitiveWorkspaceExists(
-  workspaceRoot: string,
-  caseId: string,
-): Promise<boolean> {
-  try {
-    const entries = await readdir(workspaceRoot, { withFileTypes: true });
-    return entries.some(
-      (entry) =>
-        entry.isDirectory() &&
-        entry.name.toLowerCase() === caseId.toLowerCase(),
-    );
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
-}
-
-export async function createCaseWorkspace(
-  caseId: string,
-  cwd: string,
+export async function runNewCaseCommand(
+  input: {
+    caseId: string;
+    cwd: string;
+    home: string | undefined;
+    yes: boolean;
+  },
+  runtime?: WorkspaceRuntime,
 ): Promise<CommandResult> {
+  const { caseId } = input;
   if (!caseId) {
     return {
       exitCode: 1,
@@ -160,28 +112,5 @@ export async function createCaseWorkspace(
     return invalidCaseIdResult(caseId);
   }
 
-  const displayPath = workspaceDisplayPath(caseId);
-  const workspaceRoot = path.join(cwd, "workspace");
-  const workspacePath = path.join(cwd, "workspace", caseId);
-  const rootNodePath = path.join(workspacePath, "root.yaml");
-  const rootNodeDisplayPath = path.posix.join(displayPath, "root.yaml");
-
-  if (
-    (await pathExists(workspacePath)) ||
-    (await caseInsensitiveWorkspaceExists(workspaceRoot, caseId))
-  ) {
-    return {
-      exitCode: 1,
-      stderr: `Case workspace already exists: ${displayPath}\n`,
-    };
-  }
-
-  await mkdir(workspacePath, { recursive: true });
-  const timestamp = new Date().toISOString();
-  await writeFile(rootNodePath, rootNodeContent(timestamp), { flag: "wx" });
-
-  return {
-    exitCode: 0,
-    stdout: `Created case workspace: ${displayPath}\nCreated root node: ${rootNodeDisplayPath}\nNext: add the complaint document with:\n  casegraph cases add document ${caseId} complaint <path-to-pdf>\n`,
-  };
+  return createCaseWorkspace(input, runtime);
 }
