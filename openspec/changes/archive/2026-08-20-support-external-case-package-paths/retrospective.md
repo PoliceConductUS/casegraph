@@ -4,6 +4,11 @@
 > Commit range: `e7983aa..f6a0046`  
 > Worktree: `/Users/dalelotts/dev/PoliceConductUS/casegraph/.worktrees/issue-1-external-package-paths`
 
+> **Update 2026-08-20**: The §0 pre-archive snapshot is superseded for final
+> completion evidence by `verify.md` at commit `f1c3b2a`; all 18 tasks are
+> complete, all three delta specs are synced, and archive-state validation
+> passed 157/157 tests and 7/7 durable specs.
+
 ## 0. Evidence
 
 - **Commit range**: `e7983aa..f6a0046` (15 commits)

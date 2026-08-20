@@ -39,5 +39,5 @@
 - [x] 5.2 Run repository-wide formatting, lint, tests, typecheck, build, and
       strict OpenSpec validation.
 - [x] 5.3 Record final evidence and known limitations in `verify.md`.
-- [ ] 5.4 Run the required retrospective, archive the accepted OpenSpec change
+- [x] 5.4 Run the required retrospective, archive the accepted OpenSpec change
       on this branch, revalidate, and synchronize the stack.

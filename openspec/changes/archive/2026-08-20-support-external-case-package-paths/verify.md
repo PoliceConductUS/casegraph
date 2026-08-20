@@ -1,18 +1,18 @@
 # Verification Report
 
 **Change**: `support-external-case-package-paths`  
-**Verified at**: `2026-08-20 13:14:53 CDT`  
+**Verified at**: `2026-08-20 13:20:11 CDT`
 **Verifier**: `Codex`
 
 ## 1. Structural Validation (`openspec validate --all --json`)
 
 - [x] Every item returned `"valid": true`.
 
-`npm exec -- openspec validate --all --json` exited 0: seven items passed and
-zero failed (six durable specs and this change).
+`npm exec -- openspec validate --all --json` exited 0 after archive: seven
+durable specs passed and zero failed.
 
-Fresh repository validation at commit `f6a0046` used the exact command
-`npm run validate` and exited 0:
+Fresh repository validation on the archived tree that became commit `f1c3b2a`
+used the exact command `npm run validate` and exited 0:
 
 - Prettier write/check and ESLint passed.
 - Vitest passed 157 tests in 8 files with zero failures.
@@ -22,30 +22,30 @@ Fresh repository validation at commit `f6a0046` used the exact command
 
 ## 2. Task Completion (`tasks.md`)
 
-- [ ] Every task is complete before archive.
+- [x] Every task is complete.
 
-Seventeen of eighteen task checkboxes are complete. Task 5.4 remains open
-because it is the canonical post-verify sequence: write the retrospective,
-archive this change, revalidate the archived state, and synchronize the stack.
-It does not block starting that sequence; it must be checked in the archived
-task file only after the work exists.
+All eighteen task checkboxes are complete. Task 5.4 was checked only after the
+retrospective existed, the change was archived with delta-spec synchronization,
+the archived tree passed `npm run validate`, and commit `f1c3b2a` was
+synchronized to the remote branch.
 
-| Task | Incomplete reason                                                     | Blocks archive?                     |
-| ---- | --------------------------------------------------------------------- | ----------------------------------- |
-| 5.4  | Retrospective and archive must occur after this verification artifact | No; this is the archive step itself |
+| Task | Incomplete reason | Blocks archive? |
+| ---- | ----------------- | --------------- |
+| —    | —                 | —               |
 
 ## 3. Delta Spec Sync State
 
-All three capability deltas require archive-time synchronization:
+All three capability deltas were synchronized during archive:
 
-| Capability             | Sync state | Notes                                                  |
-| ---------------------- | ---------- | ------------------------------------------------------ |
-| `case-packages`        | Needs sync | New durable capability with three added requirements   |
-| `case-workspaces`      | Needs sync | Eight modified requirements and two added requirements |
-| `courtlistener-import` | Needs sync | Four modified requirements                             |
+| Capability             | Sync state | Notes                                              |
+| ---------------------- | ---------- | -------------------------------------------------- |
+| `case-packages`        | Synced     | Created durable capability with three requirements |
+| `case-workspaces`      | Synced     | Applied eight modified and two added requirements  |
+| `courtlistener-import` | Synced     | Applied four modified requirements                 |
 
-`openspec archive -y support-external-case-package-paths` will apply these
-deltas to the durable specs before moving the change under `archive/`.
+`npm exec -- openspec archive support-external-case-package-paths --yes`
+reported totals of 5 added and 12 modified requirements, then moved the change
+to `openspec/changes/archive/2026-08-20-support-external-case-package-paths/`.
 
 ## 4. Design / Specs Coherence Spot Check
 
@@ -60,13 +60,13 @@ No design/spec drift was found in the spot check.
 
 ## 5. Implementation Signal
 
-- [x] Worktree has no staged, unstaged, or untracked files before this report update.
-- [x] All implementation and review-fix commits are pushed.
+- [x] Worktree had no staged, unstaged, or untracked files before this final evidence update.
+- [x] All implementation, review-fix, and archive commits are pushed.
 
-The complete implementation range is `e7983aa..f6a0046` (15 commits, 37 files,
-5,898 insertions and 979 deletions). `HEAD` and
-`origin/codex/issue-1-external-package-paths` both resolved to
-`f6a0046f1cee3dc792aa4f6f67c8edbca5de3775` before this report update.
+The complete range through archive is `e7983aa..f1c3b2a` (16 commits, 41
+files, 6,490 insertions and 1,200 deletions). Commit `f1c3b2a` was pushed to
+`origin/codex/issue-1-external-package-paths` before this final evidence
+update.
 
 Independent per-task reviews passed. The final whole-branch review found one
 unused legacy parser/helper block; commit `f6a0046` removed it, and the same
@@ -103,7 +103,7 @@ rg -n -i 'managed.?write|package.?write.?author|write.?authori|compatib|legacy.*
 
 ## 7. Deferred Manual Dogfood vs Automated Test Equivalence
 
-`rg -n '\[~\]' openspec/changes/support-external-case-package-paths/plan.md`
+`rg -n '\[~\]' openspec/changes/archive/2026-08-20-support-external-case-package-paths/plan.md`
 exited 1 with zero matches. The plan contains no deferred manual dogfood rows,
 so no automated-test equivalence gap exists.
 
@@ -116,9 +116,8 @@ Dependency remediation is outside this change and was not applied.
 ## Overall Decision
 
 - [ ] PASS
-- [x] PASS WITH WARNINGS — dependency audit remains open and Task 5.4 is the pending post-verify archive sequence.
+- [x] PASS WITH WARNINGS — the dependency audit remains open.
 - [ ] FAIL
 
-**Next step**: write `retrospective.md`, archive and sync the three capability
-deltas, check Task 5.4 in the archived task file, rerun `npm run validate`,
-synchronize the stack, then open the focused stacked pull request.
+**Next step**: commit and synchronize this final evidence update, then open the
+focused stacked pull request.
