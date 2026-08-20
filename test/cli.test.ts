@@ -649,12 +649,38 @@ function createSequentialIds(...ids: string[]): () => string {
 }
 
 describe("casegraph help", () => {
-  test("root help lists the cases command group", async () => {
+  test("root help lists the cases and packages command groups", async () => {
     const result = await runCasegraph(["--help"]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Usage: casegraph");
     expect(result.stdout).toContain("cases");
+    expect(result.stdout).toContain("packages");
+  });
+
+  test("packages help lists only the external-root add command", async () => {
+    const result = await runCasegraph(["packages", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Usage: casegraph packages");
+    expect(result.stdout).toContain("add <case-id> <path>...");
+  });
+
+  test("packages add help explains atomic external-root additions", async () => {
+    const result = await runCasegraph(["packages", "add", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "Usage: casegraph packages add <case-id> <path>...",
+    );
+    expect(result.stdout).toContain("complete batch");
+  });
+
+  test("does not expose packages beneath cases", async () => {
+    const result = await runCasegraph(["cases", "packages", "--help"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Unknown cases command: packages");
   });
 
   test("cases help lists the new case command", async () => {

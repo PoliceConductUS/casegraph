@@ -24,6 +24,10 @@ import {
 } from "./cases/import/courtlistener/docket/command.js";
 import type { CourtListenerImportRuntime } from "./cases/import/courtlistener/docket/types.js";
 import { casesNewHelp, runNewCaseCommand } from "./cases/new/command.js";
+import {
+  packagesAddHelp,
+  runPackagesAddCommand,
+} from "./cases/packages/add/command.js";
 import type { WorkspaceRuntime } from "./cases/workspaces/create.js";
 import { casesReportHelp, runReportCommand } from "./cases/report/command.js";
 import { Command } from "commander";
@@ -44,8 +48,21 @@ CaseGraph creates separated case homes for personal case analysis.
 
 Commands:
   cases    Work with case workspaces
+  packages Manage external package roots
 
 Run "casegraph cases --help" for case workspace commands.
+Run "casegraph packages --help" for external package commands.
+`;
+
+const packagesHelp = `Usage: casegraph packages <command>
+
+Manage external package roots for a case.
+
+Commands:
+  add <case-id> <path>...
+                   Add ordered external package roots
+
+Run "casegraph packages add --help" for details.
 `;
 
 const casesHelp = `Usage: casegraph cases <command>
@@ -122,6 +139,56 @@ export async function runCasegraph(
   }
 
   const [command, subcommand] = args;
+
+  if (command === "packages") {
+    if (!subcommand || isHelpRequest(args.slice(1, 2))) {
+      return { exitCode: 0, stdout: packagesHelp };
+    }
+
+    if (subcommand === "add" && isHelpRequest(args.slice(2))) {
+      return { exitCode: 0, stdout: packagesAddHelp };
+    }
+
+    if (subcommand !== "add") {
+      return {
+        exitCode: 1,
+        stderr: `Unknown packages command: ${subcommand}\n\n${packagesHelp}`,
+      };
+    }
+
+    let packageCommandResult: CommandResult | undefined;
+    const packageProgram = new Command();
+    packageProgram
+      .name("casegraph")
+      .exitOverride()
+      .allowUnknownOption(false)
+      .helpOption(false)
+      .showHelpAfterError(false)
+      .showSuggestionAfterError(false);
+
+    packageProgram
+      .command("packages")
+      .helpOption(false)
+      .command("add")
+      .helpOption(false)
+      .argument("[caseId]")
+      .argument("[paths...]")
+      .action(async (caseId: string | undefined, paths: string[]) => {
+        packageCommandResult = await runPackagesAddCommand(
+          commandArguments(caseId, paths),
+          cwd,
+          runtime,
+        );
+      });
+
+    try {
+      await packageProgram.parseAsync([...args], { from: "user" });
+    } catch {
+      return { exitCode: 1, stderr: packagesAddHelp };
+    }
+
+    return packageCommandResult ?? { exitCode: 1, stderr: packagesAddHelp };
+  }
 
   if (command !== "cases") {
     return {
