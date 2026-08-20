@@ -1,0 +1,74 @@
+schema: superpowers-bridge
+
+context: |
+  CaseGraph is an investigation-first case graph for the user's personal federal
+  case work. It tracks case workspaces, analysis, evidence, hypotheses, gaps,
+  sources, authorities, opponent positions, and drafting inputs without losing
+  the relationships between them.
+
+  The immediate goal is not drafting filings. The immediate goal is creating
+  separated case workspaces that can later hold auditable case graphs and
+  analysis.
+
+  Current scope:
+  - Start with the smallest useful behavior.
+  - The first command is `casegraph cases new <case-id>`.
+  - Support more than one active case immediately.
+  - Keep each main case graph, analysis worktree, and workspace separated by
+    case ID.
+  - Case workspaces may be checked into this repository.
+  - Do not add a default/current case until a future spec requires it.
+  - Do not add graph storage, source connectors, citation auditing, reports, or
+    drafting integration until current case work requires them.
+
+  Terminology:
+  - "Main case graph" means the durable case graph records under
+    `workspace/<case-id>/` outside `analysis/`.
+  - "Analysis worktree" means temporary analysis working files under
+    `workspace/<case-id>/analysis/`.
+  - "Current analysis worktree" means the active analysis worktree at
+    `workspace/<case-id>/analysis/current/`.
+  - Use "main case graph" instead of "accepted graph" for current durable case
+    state.
+  - "Authority" means a graph-backed legal source, not just a citation record.
+  - "Authority graph" means the reusable graph extracted from the authority
+    itself.
+  - "Case graph" means the graph for one case.
+  - "Authority edge" means a case-specific legal-significance connection from
+    the case graph to authority graph nodes.
+  - Authority relevance is represented by case-specific edges from the case
+    graph to authority graph nodes, and each edge must explain the legal
+    significance of the connection.
+  - Authority edges must include pinpoint citation support. Citations should be
+    pinpoint citations unless the citation only identifies that a source exists.
+  - Authorities are expected to become a top-level collection under
+    `authorities/<authority-id>/root.yaml` when a future OpenSpec change adds
+    authority behavior.
+
+  CLI invariants:
+  - CLI commands must define their accepted argument shape explicitly.
+  - Unexpected extra positional tokens are always a hard error.
+  - Commands must never silently ignore extra tokens or proceed with only the
+    first token.
+
+  Dependency policy:
+  - Use the latest stable dependency versions when adding or updating
+    dependencies.
+  - Check the current published version before adding dependencies.
+  - Review dependencies at least weekly and report available updates to the
+    user.
+
+  Current technical state:
+  - The project is a small Node.js TypeScript CLI.
+  - The local development wrapper is `./casegraph`.
+  - Keep implementation direct and scoped to the current OpenSpec outcome.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

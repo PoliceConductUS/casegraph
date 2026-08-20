@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+casegraph_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$casegraph_dir/node_modules/.bin/tsx" "$casegraph_dir/src/cli.ts" "$@"

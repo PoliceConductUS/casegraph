@@ -1,0 +1,29 @@
+docket:
+  kind: docket
+  properties:
+    court_id: court_id
+    case_name: case_name
+    docket_number: docket_number
+    date_filed: date_filed
+party:
+  kind: party
+  properties:
+    name: name
+    roles: party_types
+attorney:
+  kind: attorney
+  properties:
+    name: name
+docket_entry:
+  kind: docket_entry
+  properties:
+    entry_number: entry_number
+    date_filed: date_filed
+    description: description
+recap_document:
+  kind: document
+  properties:
+    document_type: document_type
+    document_number: document_number
+    description: description
+    cites: cites
