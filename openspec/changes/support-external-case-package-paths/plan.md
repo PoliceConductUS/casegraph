@@ -347,12 +347,14 @@ or writing; package-path changes flow only through the `CaseHome` writer.
 
 - Create: `src/cases/workspaces/load.ts`
 - Create: `src/cases/workspaces/load.test.ts`
+- Modify: `src/cases/workspaces/create.ts`
 - Modify: `src/cases/workspaces.ts`
 
 **Interfaces:**
 
 - Consumes: both typed readers and the `CaseHome` writer.
-- Extends `WorkspaceRuntime` with:
+- Extends the existing `WorkspaceRuntime` in
+  `src/cases/workspaces/create.ts` with:
 
   ```ts
   requestPackagePathReplacement?: (request: {
