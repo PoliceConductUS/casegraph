@@ -9,18 +9,24 @@ export const packagesAddHelp = `Usage: casegraph packages add <case-id> <path>..
 
 Add external package roots to a case in one complete batch.
 
-Every path must be an existing directory. Package roots are recorded in supplied
-order and remain read-only for managed writes.
+Every path must be an existing directory. Additions update
+CaseHome.spec.packagePath in supplied order and remain read-only for managed
+writes.
 `;
 
 function failed(message: string): CommandResult {
   return { exitCode: 1, stderr: `${message}\n` };
 }
 
+type CanonicalDirectory = {
+  canonicalPath: string;
+  resolvedPath: string;
+};
+
 async function canonicalDirectory(
   suppliedPath: string,
   cwd: string,
-): Promise<string | CommandResult> {
+): Promise<CanonicalDirectory | CommandResult> {
   const resolvedPath = path.resolve(cwd, suppliedPath);
 
   try {
@@ -35,7 +41,7 @@ async function canonicalDirectory(
     throw error;
   }
 
-  return realpath(resolvedPath);
+  return { canonicalPath: await realpath(resolvedPath), resolvedPath };
 }
 
 function storedPackagePath(
@@ -58,6 +64,7 @@ export async function runPackagesAddCommand(
   const [caseId, ...suppliedPaths] = args;
   const workspace = await loadCaseWorkspace(caseId, cwd, runtime, {
     requireWritableHome: true,
+    deferPackagePathRepair: true,
   });
   if ("exitCode" in workspace) {
     return workspace;
@@ -67,32 +74,42 @@ export async function runPackagesAddCommand(
   for (const packageDirectory of workspace.resolvedPackagePath) {
     existingDirectories.push(await realpath(packageDirectory));
   }
-  const canonicalHomeDirectory = await realpath(workspace.homeDirectory);
-
   const identities = new Set(existingDirectories);
-  const additions: string[] = [];
+  const additions: CanonicalDirectory[] = [];
   for (const suppliedPath of suppliedPaths) {
     const packageDirectory = await canonicalDirectory(suppliedPath, cwd);
-    if (typeof packageDirectory !== "string") {
+    if ("exitCode" in packageDirectory) {
       return packageDirectory;
     }
-    if (identities.has(packageDirectory)) {
+    if (identities.has(packageDirectory.canonicalPath)) {
       return failed(
-        `Package path duplicates package path: ${packageDirectory}`,
+        `Package path duplicates package path: ${packageDirectory.canonicalPath}`,
       );
     }
-    identities.add(packageDirectory);
+    identities.add(packageDirectory.canonicalPath);
     additions.push(packageDirectory);
+  }
+
+  const storedAdditions: string[] = [];
+  for (const packageDirectory of additions) {
+    const storedPath = storedPackagePath(
+      workspace.homeDirectory,
+      packageDirectory.resolvedPath,
+    );
+    const storedIdentity = await realpath(
+      path.resolve(workspace.homeDirectory, storedPath),
+    );
+    if (storedIdentity !== packageDirectory.canonicalPath) {
+      return failed(
+        `Package path does not resolve from CaseHome root: ${storedPath}`,
+      );
+    }
+    storedAdditions.push(storedPath);
   }
 
   await writeCaseHome(workspace.homeRoot, {
     type: "replacePackagePath",
-    packagePath: [
-      ...workspace.packagePath,
-      ...additions.map((directory) =>
-        storedPackagePath(canonicalHomeDirectory, directory),
-      ),
-    ],
+    packagePath: [...workspace.packagePath, ...storedAdditions],
   });
 
   return {
@@ -100,7 +117,10 @@ export async function runPackagesAddCommand(
     stdout:
       `CaseHome root: ${workspace.homeRoot}\n` +
       "External package roots:\n" +
-      [...existingDirectories, ...additions]
+      [
+        ...existingDirectories,
+        ...additions.map(({ canonicalPath }) => canonicalPath),
+      ]
         .map((directory) => `  ${directory}\n`)
         .join(""),
   };

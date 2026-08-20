@@ -183,8 +183,16 @@ export async function runCasegraph(
 
     try {
       await packageProgram.parseAsync([...args], { from: "user" });
-    } catch {
-      return { exitCode: 1, stderr: packagesAddHelp };
+    } catch (error) {
+      const commandError = error as Error & { code?: string };
+      if (commandError.code?.startsWith("commander.")) {
+        return {
+          exitCode: 1,
+          stderr: `${commandError.message}\n\n${packagesAddHelp}`,
+        };
+      }
+
+      return { exitCode: 1, stderr: `${commandError.message}\n` };
     }
 
     return packageCommandResult ?? { exitCode: 1, stderr: packagesAddHelp };

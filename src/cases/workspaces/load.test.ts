@@ -423,6 +423,37 @@ describe("loadCaseWorkspace", () => {
     }
   });
 
+  test("defers a confirmed package-root repair without writing the CaseHome", async () => {
+    const cwd = await makeWorkingDirectory();
+
+    try {
+      const replacement = path.join(cwd, "replacement");
+      await mkdir(replacement);
+      const workspace = await createWorkspace(cwd, ["missing"]);
+      const before = await readFile(workspace.homeRoot, "utf8");
+
+      const result = await loadCaseWorkspace(
+        caseId,
+        cwd,
+        {
+          ...runtime(workspace.casegraphHome),
+          requestPackagePathReplacement: () => Promise.resolve("replacement"),
+          approvePackagePathReplacement: () => Promise.resolve(true),
+        },
+        { requireWritableHome: true, deferPackagePathRepair: true },
+      );
+
+      expect("exitCode" in result).toBe(false);
+      if ("exitCode" in result) return;
+      expect(result.packagePath).toEqual(["../replacement"]);
+      expect(result.resolvedPackagePath).toEqual([replacement]);
+      expect(result.hasDeferredPackagePathRepair).toBe(true);
+      await expect(readFile(workspace.homeRoot, "utf8")).resolves.toBe(before);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a replacement that duplicates another package root atomically", async () => {
     const cwd = await makeWorkingDirectory();
 

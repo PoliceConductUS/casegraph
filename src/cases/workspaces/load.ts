@@ -20,6 +20,12 @@ export type ResolvedCaseWorkspace = {
   graphRoot: CaseGraphRoot;
   packagePath: readonly string[];
   resolvedPackagePath: readonly string[];
+  hasDeferredPackagePathRepair: boolean;
+};
+
+export type CaseWorkspaceLoadOptions = {
+  requireWritableHome: boolean;
+  deferPackagePathRepair?: boolean;
 };
 
 function failed(message: string): CommandResult {
@@ -77,10 +83,21 @@ async function validatePackagePaths(
   homeRoot: string,
   homeDirectory: string,
   home: CaseHome,
-): Promise<readonly string[] | CommandResult | "repaired"> {
+  deferPackagePathRepair: boolean,
+): Promise<
+  | {
+      packagePath: readonly string[];
+      resolvedPackagePath: readonly string[];
+      hasDeferredPackagePathRepair: boolean;
+    }
+  | CommandResult
+  | "repaired"
+> {
+  const packagePath = [...home.spec.packagePath];
   const resolvedPackagePath: string[] = [];
+  let hasDeferredPackagePathRepair = false;
 
-  for (const [index, storedPath] of home.spec.packagePath.entries()) {
+  for (const [index, storedPath] of packagePath.entries()) {
     const resolvedPath = resolveStoredPackagePath(homeDirectory, storedPath);
     if (await isDirectory(resolvedPath)) {
       resolvedPackagePath.push(resolvedPath);
@@ -106,8 +123,8 @@ async function validatePackagePaths(
     }
 
     const newStoredPath = storedReplacementPath(homeDirectory, replacement);
-    const rewrittenPackagePath = home.spec.packagePath.map(
-      (entry, entryIndex) => (entryIndex === index ? newStoredPath : entry),
+    const rewrittenPackagePath = packagePath.map((entry, entryIndex) =>
+      entryIndex === index ? newStoredPath : entry,
     );
     const duplicate = rewrittenPackagePath.some(
       (entry, entryIndex) =>
@@ -132,6 +149,13 @@ async function validatePackagePaths(
       );
     }
 
+    if (deferPackagePathRepair) {
+      packagePath[index] = newStoredPath;
+      resolvedPackagePath.push(replacement);
+      hasDeferredPackagePathRepair = true;
+      continue;
+    }
+
     try {
       await writeCaseHome(homeRoot, {
         type: "replacePackagePath",
@@ -146,14 +170,14 @@ async function validatePackagePaths(
     return "repaired";
   }
 
-  return resolvedPackagePath;
+  return { packagePath, resolvedPackagePath, hasDeferredPackagePathRepair };
 }
 
 export async function loadCaseWorkspace(
   caseId: string,
   cwd: string,
   runtime: WorkspaceRuntime,
-  options: { requireWritableHome: boolean },
+  options: CaseWorkspaceLoadOptions,
 ): Promise<ResolvedCaseWorkspace | CommandResult> {
   const casegraphHome =
     runtime.casegraphHome ?? path.join(homedir(), ".casegraph");
@@ -212,6 +236,7 @@ export async function loadCaseWorkspace(
       homeRoot,
       homeDirectory,
       home,
+      options.deferPackagePathRepair === true,
     );
     if (packagePath === "repaired") {
       home = await readHome(homeRoot);
@@ -235,8 +260,9 @@ export async function loadCaseWorkspace(
       homeRoot,
       homeDirectory,
       graphRoot: home.spec.graphRoot,
-      packagePath: home.spec.packagePath,
-      resolvedPackagePath: packagePath,
+      packagePath: packagePath.packagePath,
+      resolvedPackagePath: packagePath.resolvedPackagePath,
+      hasDeferredPackagePathRepair: packagePath.hasDeferredPackagePathRepair,
     };
   }
 }

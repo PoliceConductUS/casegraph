@@ -4,11 +4,13 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import * as CaseHomeDocument from "../../workspaces/case-home-document.js";
 import {
   CASEGRAPH_API_VERSION,
   readCaseHome,
@@ -254,6 +256,175 @@ describe("packages add", () => {
       await expect(readFile(workspace.homeRoot, "utf8")).resolves.toBe(before);
     } finally {
       await rm(workspace.cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves confirmed repairs uncommitted when a later supplied path is invalid", async () => {
+    const workspace = await createWorkspace(["missing"]);
+    const replacement = path.join(workspace.cwd, "replacement");
+
+    try {
+      await mkdir(replacement);
+      const before = await readFile(workspace.homeRoot, "utf8");
+
+      const result = await runPackagesAddCommand(
+        [caseId, "still-missing"],
+        workspace.cwd,
+        {
+          ...workspace.runtime,
+          requestPackagePathReplacement: () => Promise.resolve("replacement"),
+          approvePackagePathReplacement: () => Promise.resolve(true),
+        },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Package path is not a directory");
+      await expect(readFile(workspace.homeRoot, "utf8")).resolves.toBe(before);
+    } finally {
+      await rm(workspace.cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("commits a confirmed repair and additions together", async () => {
+    const workspace = await createWorkspace(["missing"]);
+    const replacement = path.join(workspace.cwd, "replacement");
+    const addition = path.join(workspace.cwd, "addition");
+
+    try {
+      await mkdir(replacement);
+      await mkdir(addition);
+      const writeCaseHome = vi.spyOn(CaseHomeDocument, "writeCaseHome");
+
+      const result = await runPackagesAddCommand(
+        [caseId, addition],
+        workspace.cwd,
+        {
+          ...workspace.runtime,
+          requestPackagePathReplacement: () => Promise.resolve("replacement"),
+          approvePackagePathReplacement: () => Promise.resolve(true),
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(writeCaseHome).toHaveBeenCalledTimes(1);
+      expect(writeCaseHome).toHaveBeenCalledWith(workspace.homeRoot, {
+        type: "replacePackagePath",
+        packagePath: [
+          path.relative(workspace.homeDirectory, replacement),
+          path.relative(workspace.homeDirectory, addition),
+        ],
+      });
+      await expect(readCaseHome(workspace.homeRoot)).resolves.toMatchObject({
+        spec: {
+          packagePath: [
+            path.relative(workspace.homeDirectory, replacement),
+            path.relative(workspace.homeDirectory, addition),
+          ],
+        },
+      });
+      writeCaseHome.mockRestore();
+    } finally {
+      await rm(workspace.cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves a declined deferred repair unchanged", async () => {
+    const workspace = await createWorkspace(["missing"]);
+    const replacement = path.join(workspace.cwd, "replacement");
+    const addition = path.join(workspace.cwd, "addition");
+
+    try {
+      await mkdir(replacement);
+      await mkdir(addition);
+      const before = await readFile(workspace.homeRoot, "utf8");
+
+      const result = await runPackagesAddCommand(
+        [caseId, addition],
+        workspace.cwd,
+        {
+          ...workspace.runtime,
+          requestPackagePathReplacement: () => Promise.resolve("replacement"),
+          approvePackagePathReplacement: () => Promise.resolve(false),
+        },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Declined package path replacement");
+      await expect(readFile(workspace.homeRoot, "utf8")).resolves.toBe(before);
+    } finally {
+      await rm(workspace.cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("stores a relative root that resolves through a symlinked home", async ({
+    skip,
+  }) => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "casegraph-packages-link-"));
+    const actualHomeDirectory = path.join(cwd, "actual", "nested", "home");
+    const lexicalHomeDirectory = path.join(cwd, "home");
+    const homeRoot = path.join(lexicalHomeDirectory, "root.yaml");
+    const packageDirectory = path.join(cwd, "sibling");
+    const casegraphHome = path.join(cwd, ".casegraph");
+
+    try {
+      await mkdir(actualHomeDirectory, { recursive: true });
+      await mkdir(packageDirectory);
+      try {
+        await symlink(actualHomeDirectory, lexicalHomeDirectory, "dir");
+      } catch (error) {
+        const nodeError = error as NodeJS.ErrnoException;
+        if (
+          ["EPERM", "EACCES", "ENOSYS", "EOPNOTSUPP"].includes(
+            nodeError.code ?? "",
+          )
+        ) {
+          skip(
+            `symlink creation unavailable: ${nodeError.code ?? nodeError.message}`,
+          );
+          return;
+        }
+        throw error;
+      }
+      await mkdir(path.join(casegraphHome, caseId), { recursive: true });
+      await writeCaseHome(homeRoot, {
+        type: "create",
+        value: {
+          apiVersion: CASEGRAPH_API_VERSION,
+          kind: "CaseHome",
+          metadata: { name: caseId },
+          spec: {
+            graphRoot: { type: "node", kind: "case", id: "root" },
+            packagePath: [],
+            createdAt: "2026-08-20T00:00:00.000Z",
+            updatedAt: "2026-08-20T00:00:00.000Z",
+          },
+        },
+      });
+      await writeCaseLocator(path.join(casegraphHome, caseId, "root.yaml"), {
+        apiVersion: CASEGRAPH_API_VERSION,
+        kind: "CaseLocator",
+        metadata: { name: caseId },
+        spec: { home: homeRoot },
+      });
+
+      const result = await runPackagesAddCommand(
+        [caseId, packageDirectory],
+        cwd,
+        { casegraphHome },
+      );
+
+      expect(result.exitCode).toBe(0);
+      await expect(readCaseHome(homeRoot)).resolves.toMatchObject({
+        spec: { packagePath: ["../sibling"] },
+      });
+      const reloaded = await runPackagesAddCommand(
+        [caseId, packageDirectory],
+        cwd,
+        { casegraphHome },
+      );
+      expect(reloaded.stderr).toContain("duplicates package path");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
     }
   });
 });

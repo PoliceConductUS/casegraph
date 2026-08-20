@@ -674,6 +674,7 @@ describe("casegraph help", () => {
       "Usage: casegraph packages add <case-id> <path>...",
     );
     expect(result.stdout).toContain("complete batch");
+    expect(result.stdout).toContain("spec.packagePath");
   });
 
   test("does not expose packages beneath cases", async () => {
@@ -813,6 +814,36 @@ describe("casegraph help", () => {
     expect(result.stdout).toContain("Continue the current analysis");
     expect(result.stdout).toContain("analysis/current/root.yaml");
     expectNoUnimplementedAnalysisCommands(result.stdout);
+  });
+});
+
+describe("casegraph packages add failures", () => {
+  test("returns an action failure instead of add help", async () => {
+    const workingDirectory = await makeWorkingDirectory();
+
+    try {
+      await writeValidCaseHome(workingDirectory, "example-v-example-city", {
+        packagePath: ["missing"],
+      });
+
+      const result = await runCasegraphInProcess(
+        ["packages", "add", "example-v-example-city", "new-package"],
+        workingDirectory,
+        {
+          casegraphHome: path.join(workingDirectory, ".casegraph"),
+          env: process.env,
+          requestPackagePathReplacement() {
+            throw new Error("repair callback failed");
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("repair callback failed");
+      expect(result.stderr).not.toContain("Usage: casegraph packages add");
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
   });
 });
 
