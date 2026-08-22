@@ -19,9 +19,11 @@
       strict rooted resource loading, Git root/common-dir/branch/state/remotes,
       registration and recovery reports, symlinks, inherited non-primary roots,
       bare repos, every `.git`-file checkout, CLI/import boundaries, immutable
-      sorted authoritative snapshot document paths with observer-proven zero
-      extra reads/scans, recovery reuse, normalized no-optional-lock Git command
-      audits, conflicting-registration ineligibility, exact public early-report
+      sorted authoritative snapshot document paths with dedicated Vitest
+      module-observer proof of unchanged exact `realpath`/`lstat`/`readFile`
+      call maps, recovery reuse, symlink no-read proof without exported test
+      seams, normalized no-optional-lock Git command audits,
+      conflicting-registration ineligibility, exact public early-report
       discriminants with independent registration, and raw byte/ref
       immutability.
 - [ ] 2.2 Implement the smallest snapshot and exact read-only inspection

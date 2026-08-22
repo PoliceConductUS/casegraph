@@ -86,6 +86,15 @@ reference typed-selector discovery or traversal order. Inspection copies these
 paths into the recovery inventory instead of deriving resource documents from
 directory contents.
 
+This result extension does not add parameters or test fields to
+`openCaseHomeResources`, `InspectGitBackedCaseHomeDependencies`, or the package
+API. Dedicated Vitest modules install hoisted wrappers around
+`node:fs/promises` before dynamically importing the resource or inspection
+modules. They retain complete per-path `realpath`, `lstat`, and `readFile` call
+maps plus directory-enumeration calls while delegating to the real filesystem.
+This makes the existing baseline, zero document-path call delta, and symlink
+no-read boundary observable without a production test seam.
+
 The Git boundary executes argument arrays without a shell and disables optional
 Git locks for every repository-inspection command so status/stat refresh cannot
 rewrite the index. It reports the Git top-level, Git directory, common

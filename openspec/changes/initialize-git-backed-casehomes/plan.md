@@ -183,10 +183,14 @@ YAML, Zod, Vitest, OpenSpec.
 
 - Modify: `src/resources/casehome-storage/casehome-resources.ts`
 - Modify: `src/resources/casehome-storage/casehome-resources.test.ts`
+- Create:
+  `src/resources/casehome-storage/casehome-resources.path-observation.test.ts`
 - Modify: `src/casehomes/git-backed-casehome/git.ts`
 - Verify unchanged: `src/casehomes/git-backed-casehome/index.ts`
 - Modify: `src/casehomes/git-backed-casehome/inspect.ts`
 - Modify: `src/casehomes/git-backed-casehome/inspect.test.ts`
+- Create:
+  `src/casehomes/git-backed-casehome/inspect.path-observation.test.ts`
 - Verify unchanged: `src/cli.ts`
 - Verify unchanged: `test/cli.test.ts`
 
@@ -206,10 +210,11 @@ YAML, Zod, Vitest, OpenSpec.
   `{ state: "not-inspected"; diagnostic: string }` and `RepositoryReport` with
   that exact identity-failure variant while retaining
   `{ state: "unavailable"; diagnostic: string }` for Git failure.
-- Modifies: the internal inspection dependencies with the narrow filesystem and
-  strict-opener seams needed to count exact-child `lstat`, target reads, and
-  resource opening deterministically in focused tests; production defaults
-  remain the existing Node and strict-resource functions.
+- Preserves: the production `openCaseHomeResources(caseHomePath, registry)`
+  parameters and the exported `InspectGitBackedCaseHomeDependencies` and package
+  API. No filesystem observer, counter, or test-only field enters production;
+  the only approved resource API change is immutable `documentPaths` on the
+  returned snapshot.
 
 - [ ] **Step 1: Build real temporary Git fixture helpers in the test file**
 
@@ -237,16 +242,25 @@ YAML, Zod, Vitest, OpenSpec.
   containment, and lexical UID-derived segments carry no semantic membership
   priority.
 
-  Use the existing test-only `observeRegistryReads` counters around exactly one
-  `openCaseHomeResources` call. Assert each rooted canonical document retains
-  exactly one existing `inspectionCount`, every `readCount` remains at its
-  existing value, the unreferenced document has both counts zero, and observing
-  `snapshot.documentPaths` produces zero counter delta. Keep a malformed
-  unreferenced canonical-looking document as the no-traversal witness and add a
-  source-boundary assertion that the extension introduces no `readdir`,
-  `opendir`, glob, or recursive path scan. In `inspect.test.ts`, prove recovery
-  copies the snapshot paths exactly once and does not infer resource paths by
-  scanning the CaseHome.
+  In the dedicated `casehome-resources.path-observation.test.ts`, install a
+  hoisted Vitest mock/wrapper for `node:fs/promises` before dynamically importing
+  `casehome-resources.ts` or `resource-document.ts`. Delegate to the real module
+  while recording complete per-path call maps for `realpath`, `lstat`, and
+  `readFile`, plus directory-enumeration calls. Combine those maps with the
+  existing test-only
+  `observeRegistryReads` read/inspection counters around exactly one
+  `openCaseHomeResources` call.
+
+  First record the exact already-required baseline call maps for the fixture.
+  Then assert adding and reading `snapshot.documentPaths` leaves every
+  `realpath`, `lstat`, and `readFile` per-path count exactly equal to that
+  baseline. Assert each rooted canonical document has one raw `readFile` and one
+  registry inspection during the single open, retains the existing registry
+  read count, and the malformed unreferenced canonical-looking document has zero
+  `readFile`, registry-read, and registry-inspection calls. Assert the directory-
+  enumeration call map is unchanged and contains no resource-membership scan.
+  In `inspect.test.ts`, prove recovery copies the snapshot paths exactly once
+  and does not infer resource paths by scanning the CaseHome.
 
   Add a CaseFolder fixture that is itself a committed repository. With no exact
   child repository, assert inspection reports the inherited root as
@@ -275,10 +289,14 @@ YAML, Zod, Vitest, OpenSpec.
   `CaseHomeResourceReport { state: "not-inspected", diagnostic }`;
   `RepositoryReport { state: "not-inspected", diagnostic }`; independently
   inspected registration; false structural/registration/mutation readiness;
-  exact diagnostics; and safely observed recovery. Use the deterministic
-  injected path/strict-opener observer to prove the exact child path receives
-  one `lstat`, target open/read/realpath/readdir and strict-opener counts remain
-  zero, and registration inspection still occurs.
+  exact diagnostics; and safely observed recovery. In the dedicated
+  `inspect.path-observation.test.ts`, install hoisted test-local wrappers for
+  `node:fs/promises` and the strict CaseHome resource module before dynamically
+  importing `inspect.ts`. Prove the exact link entry receives one `lstat`, no
+  target path receives `realpath`, `lstat`, `readdir`, or read/open access, the
+  strict opener is never called, and registration inspection still occurs. Do
+  not add an observer field to `InspectGitBackedCaseHomeDependencies` or export
+  any test seam.
 
   For Git unavailable with a safely identifiable normal child, assert every
   named field: `classification: "unavailable"`; canonical `paths`; truthful
@@ -295,7 +313,9 @@ YAML, Zod, Vitest, OpenSpec.
   ```bash
   npm test -- \
     src/resources/casehome-storage/casehome-resources.test.ts \
-    src/casehomes/git-backed-casehome/inspect.test.ts
+    src/resources/casehome-storage/casehome-resources.path-observation.test.ts \
+    src/casehomes/git-backed-casehome/inspect.test.ts \
+    src/casehomes/git-backed-casehome/inspect.path-observation.test.ts
   ```
 
   Expected: FAIL against the existing boundaries because the snapshot lacks
@@ -356,9 +376,16 @@ YAML, Zod, Vitest, OpenSpec.
   storage test and require only the lexical-order witness to fail. Restore, then
   temporarily append a canonical-looking unreferenced document path; require
   the unreferenced-zero witness to fail. Restore, then introduce a directory
-  enumeration call and require the no-scan source boundary to fail. Restore,
-  then temporarily omit optional lock disabling from inspection; require the
-  stale-stat raw-index witness to fail. Feed the command audit
+  enumeration call and require only the no-scan call-map witness to fail.
+  Restore,
+  then temporarily add one extra per-document `realpath`, rerun the dedicated
+  resource observation module, and require only its reason-specific `realpath`
+  call-map witness to fail. Repeat separately for one extra per-document `lstat`
+  and one extra per-document `readFile`, requiring only the matching counter
+  witness to fail each time while every nonmatching call-map and result assertion
+  stays green. Restore after each mutation. Then temporarily omit optional lock
+  disabling from inspection; require the stale-stat raw-index witness to fail.
+  Feed the command audit
   `['--no-optional-locks', 'remote', 'add', 'origin', 'forbidden']` and require
   the normalized forbidden-command witness to fail. Restore production after
   every mutation and rerun the complete focused GREEN.
@@ -368,9 +395,11 @@ YAML, Zod, Vitest, OpenSpec.
   ```bash
   git add src/resources/casehome-storage/casehome-resources.ts \
     src/resources/casehome-storage/casehome-resources.test.ts \
+    src/resources/casehome-storage/casehome-resources.path-observation.test.ts \
     src/casehomes/git-backed-casehome/git.ts \
     src/casehomes/git-backed-casehome/inspect.ts \
     src/casehomes/git-backed-casehome/inspect.test.ts \
+    src/casehomes/git-backed-casehome/inspect.path-observation.test.ts \
     openspec/changes/initialize-git-backed-casehomes/tasks.md
   git commit -m "feat(casehomes): expose read-only recovery inventory"
   git push

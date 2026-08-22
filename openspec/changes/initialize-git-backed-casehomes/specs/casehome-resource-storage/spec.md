@@ -73,12 +73,13 @@ document read, path inspection, or directory scan.
 
 - **WHEN** one `openCaseHomeResources` call opens the Case root and reachable
   rooted members
-- **THEN** each canonical rooted document has exactly the existing
-  once-per-open resource inspection
-- **THEN** an unreferenced canonical-looking document has zero resource reads
-  and zero resource inspections
-- **THEN** exposing or reading `documentPaths` adds zero resource reads, zero
-  resource inspections, zero path inspections, and zero directory scans
+- **THEN** each canonical rooted document has exactly one raw document read and
+  exactly one resource inspection during that open
+- **THEN** an unreferenced canonical-looking document has zero raw document
+  reads and zero resource inspections
+- **THEN** exposing or reading `documentPaths` adds zero `realpath`, `lstat`, or
+  `readFile` calls beyond the already-required per-path open baseline, zero
+  resource inspections, and zero directory scans
 
 #### Scenario: Document paths are immutable and lexicographically sorted
 
