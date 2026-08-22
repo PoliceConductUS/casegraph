@@ -154,7 +154,7 @@ export function assertUniqueResourceUids(
 
 Run `npm test -- src/resources/resource-uid.test.ts`.
 
-Expected: 5 tests pass with no warnings.
+Expected: 7 tests pass with no warnings.
 
 - [ ] **Step 5: Mark the coarse UID tasks complete**
 
