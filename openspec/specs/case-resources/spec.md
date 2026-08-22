@@ -14,11 +14,11 @@ resource through that definition's strict reader/writer pair. The initial API
 version MUST be `casegraph.policeconduct.org/v1alpha1`, and the system MUST NOT
 use a generic catch-all resource schema.
 
-#### Scenario: Initial Case resource is accepted
+#### Scenario: Case resource with membership is accepted
 
 - **WHEN** a resource contains API version
   `casegraph.policeconduct.org/v1alpha1`, kind `Case`, one valid
-  `metadata.uid`, and an empty `spec`
+  `metadata.uid`, and a `spec.resources` array of valid resource UIDs
 - **THEN** the registered `Case` resource definition accepts the resource
 - **THEN** the resulting resource contains only `apiVersion`, `kind`,
   `metadata`, and `spec`
@@ -68,10 +68,10 @@ fields placed in the wrong envelope section.
   than `uid`
 - **THEN** strict validation fails
 
-#### Scenario: Unknown spec field is rejected
+#### Scenario: Unknown Case spec field is rejected
 
-- **WHEN** an otherwise valid foundation-layer `Case` resource contains any
-  field inside its empty `spec`
+- **WHEN** an otherwise valid `Case` resource contains a spec field other than
+  `resources`
 - **THEN** strict validation fails
 
 #### Scenario: Unknown status field is rejected
@@ -161,3 +161,31 @@ overwrite an existing resource.
 
 - **WHEN** a reader receives malformed YAML
 - **THEN** reading fails with an error identifying the resource path
+
+### Requirement: Declare Resource Storage Semantics By Kind
+
+Every registered resource kind MUST declare whether it is a node or a
+legal-effect edge and MUST expose resource references and owned paths only
+through typed selectors applied to that kind's validated resource. A resource
+UID or reference MUST NOT encode the category.
+
+#### Scenario: Case declares root membership references
+
+- **WHEN** a validated `Case` contains UIDs in `spec.resources`
+- **THEN** the Case kind's typed reference selector returns those UIDs in order
+- **THEN** the Case kind is classified as a node
+
+#### Scenario: Legal-effect edge uses the same UID boundary
+
+- **WHEN** a registered legal-effect-edge fixture kind contains validated
+  endpoint UID properties
+- **THEN** its typed reference selector returns the endpoint UIDs
+- **THEN** its `metadata.uid` and endpoint references use the same global UID
+  type as node resources
+
+#### Scenario: Undeclared fields do not become storage references
+
+- **WHEN** a validated kind does not declare a resource-reference or owned-path
+  selector for a value
+- **THEN** the storage boundary does not discover that value as membership or
+  owned content

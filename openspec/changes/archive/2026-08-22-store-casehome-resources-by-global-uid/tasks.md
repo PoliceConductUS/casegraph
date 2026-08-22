@@ -27,6 +27,6 @@
 
 - [x] 4.1 Run focused storage tests and the complete repository validation,
       then resolve every failure within this change's scope.
-- [ ] 4.2 Verify Issue #41 acceptance-criteria coverage, complete the OpenSpec
+- [x] 4.2 Verify Issue #41 acceptance-criteria coverage, complete the OpenSpec
       verification and retrospective artifacts, and archive the accepted change
       before marking the draft pull request ready.
