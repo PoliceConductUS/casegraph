@@ -15,6 +15,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -1072,6 +1073,120 @@ describe("serialized CaseHome machine registration", () => {
     await expect(
       lstat(path.join(publishConfigHome, "casehomes.yaml.lock")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("closes a default guard handle when identity capture fails", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    let capturedHandle: FileHandle | undefined;
+    let publicationCount = 0;
+    const dependencies = {
+      readGuardIdentity: (handle: FileHandle) => {
+        capturedHandle = handle;
+        return Promise.reject(new Error("injected identity capture failure"));
+      },
+      publish: () => {
+        publicationCount += 1;
+        return Promise.resolve();
+      },
+    };
+    const store = new CaseHomeRegistrationStore(dependencies);
+
+    const error = await rejectionOf(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    );
+
+    expect(error.message).toContain(guardPath);
+    expect(error.message).toContain("injected identity capture failure");
+    expect(error.message).toContain("guard handle close: completed");
+    expect(error.message).toContain("guard state: unknown");
+    expect(error.message).toContain("registry published: false");
+    expect(publicationCount).toBe(0);
+    expect(capturedHandle).toBeDefined();
+    if (capturedHandle === undefined)
+      throw new Error("Guard handle not captured");
+    await expect(capturedHandle.stat()).rejects.toThrow();
+    expect((await lstat(guardPath)).isFile()).toBe(true);
+    await expect(lstat(registrationPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  test("preserves a foreign guard after compound identity capture, close, and inspection failures", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    const foreignBytes = Buffer.from(
+      "foreign guard after partial acquisition\n",
+    );
+    let capturedHandle: FileHandle | undefined;
+    let foreignIdentity:
+      | { readonly device: number; readonly inode: number }
+      | undefined;
+    let closeCount = 0;
+    let inspectionCount = 0;
+    let publicationCount = 0;
+    const dependencies = {
+      readGuardIdentity: async (handle: FileHandle) => {
+        capturedHandle = handle;
+        await unlink(guardPath);
+        await writeFile(guardPath, foreignBytes, { flag: "wx", mode: 0o600 });
+        foreignIdentity = await guardIdentity(guardPath);
+        throw new Error("injected identity capture failure");
+      },
+      closeGuardHandle: async (handle: FileHandle) => {
+        closeCount += 1;
+        await handle.close();
+        throw new Error("injected guard close failure");
+      },
+      inspectGuard: () => {
+        inspectionCount += 1;
+        return Promise.reject(new Error("injected partial inspection failure"));
+      },
+      publish: () => {
+        publicationCount += 1;
+        return Promise.resolve();
+      },
+    };
+    const store = new CaseHomeRegistrationStore(dependencies);
+
+    const error = await rejectionOf(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    );
+
+    expect(error.message).toContain(guardPath);
+    expect(error.message).toContain("injected identity capture failure");
+    expect(error.message).toContain("injected guard close failure");
+    expect(error.message).toContain("injected partial inspection failure");
+    expect(error.message).toContain("guard state: unknown");
+    expect(error.message).not.toContain("guard state: retained");
+    expect(error.message).not.toContain("guard state: absent/ownership-lost");
+    expect(error.message).toContain("registry published: false");
+    expect(closeCount).toBe(1);
+    expect(inspectionCount).toBe(1);
+    expect(publicationCount).toBe(0);
+    expect(capturedHandle).toBeDefined();
+    if (capturedHandle === undefined)
+      throw new Error("Guard handle not captured");
+    await expect(capturedHandle.stat()).rejects.toThrow();
+    await expect(readFile(guardPath)).resolves.toEqual(foreignBytes);
+    await expect(guardIdentity(guardPath)).resolves.toEqual(foreignIdentity);
+    await expect(lstat(registrationPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("reports absent ownership after successful publication removes the guard pathname", async () => {

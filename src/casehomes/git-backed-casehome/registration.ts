@@ -11,6 +11,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMap, isScalar, parseDocument, stringify } from "yaml";
 
@@ -41,10 +42,18 @@ type RegistrationGuardInspector = (
   guardPath: string,
 ) => Promise<RegistrationGuardIdentity | undefined>;
 
+type RegistrationGuardIdentityReader = (
+  guardHandle: FileHandle,
+) => Promise<RegistrationGuardIdentity>;
+
+type RegistrationGuardHandleCloser = (guardHandle: FileHandle) => Promise<void>;
+
 interface CaseHomeRegistrationStoreDependencies {
   readonly acquireGuard?: RegistrationGuardAcquirer;
+  readonly closeGuardHandle?: RegistrationGuardHandleCloser;
   readonly inspectGuard?: RegistrationGuardInspector;
   readonly publish?: RegistrationPublisher;
+  readonly readGuardIdentity?: RegistrationGuardIdentityReader;
   readonly temporaryId?: () => string;
 }
 
@@ -316,16 +325,89 @@ async function inspectRegistrationGuard(
   }
 }
 
+async function readRegistrationGuardIdentity(
+  guardHandle: FileHandle,
+): Promise<RegistrationGuardIdentity> {
+  return registrationGuardIdentity(await guardHandle.stat());
+}
+
+async function closeRegistrationGuardHandle(
+  guardHandle: FileHandle,
+): Promise<void> {
+  await guardHandle.close();
+}
+
+async function partialGuardAcquisitionFailure(input: {
+  readonly closeGuardHandle: RegistrationGuardHandleCloser;
+  readonly guardHandle: FileHandle;
+  readonly guardPath: string;
+  readonly identityError: Error;
+  readonly inspectGuard: RegistrationGuardInspector;
+}): Promise<Error> {
+  let closeError: Error | undefined;
+  try {
+    await input.closeGuardHandle(input.guardHandle);
+  } catch (error) {
+    closeError = asError(error);
+  }
+
+  let inspectionError: Error | undefined;
+  let guardState: "absent/ownership-lost" | "unknown";
+  try {
+    guardState =
+      (await input.inspectGuard(input.guardPath)) === undefined
+        ? "absent/ownership-lost"
+        : "unknown";
+  } catch (error) {
+    inspectionError = asError(error);
+    guardState = "unknown";
+  }
+
+  const closeDiagnostic =
+    closeError === undefined
+      ? "guard handle close: completed"
+      : `guard handle close diagnostic: ${closeError.toString()}`;
+  const inspectionDiagnostic =
+    inspectionError === undefined
+      ? ""
+      : `; guard state inspection diagnostic: ${inspectionError.toString()}`;
+  const causes = [input.identityError];
+  if (closeError !== undefined) causes.push(closeError);
+  if (inspectionError !== undefined) causes.push(inspectionError);
+  return new Error(
+    `Failed to capture CaseHome registration guard identity at ${input.guardPath}; identity-capture primary diagnostic: ${input.identityError.toString()}; ${closeDiagnostic}; guard state: ${guardState}${inspectionDiagnostic}; registry published: false`,
+    {
+      cause: new AggregateError(
+        causes,
+        "Guard identity capture and partial acquisition cleanup failed",
+      ),
+    },
+  );
+}
+
 async function acquireRegistrationGuard(
   guardPath: string,
+  closeGuardHandle: RegistrationGuardHandleCloser,
   inspectGuard: RegistrationGuardInspector,
+  readGuardIdentity: RegistrationGuardIdentityReader,
 ): Promise<RegistrationGuard> {
   const guardHandle = await open(guardPath, "wx", 0o600);
-  const identity = registrationGuardIdentity(await guardHandle.stat());
+  let identity: RegistrationGuardIdentity;
+  try {
+    identity = await readGuardIdentity(guardHandle);
+  } catch (error) {
+    throw await partialGuardAcquisitionFailure({
+      closeGuardHandle,
+      guardHandle,
+      guardPath,
+      identityError: asError(error),
+      inspectGuard,
+    });
+  }
   return {
     identity,
     async release(): Promise<void> {
-      await guardHandle.close();
+      await closeGuardHandle(guardHandle);
       const observedIdentity = await inspectGuard(guardPath);
       if (observedIdentity === undefined) {
         throw new Error(
@@ -423,9 +505,19 @@ export class CaseHomeRegistrationStore {
 
   constructor(dependencies: CaseHomeRegistrationStoreDependencies = {}) {
     this.#inspectGuard = dependencies.inspectGuard ?? inspectRegistrationGuard;
+    const closeGuardHandle =
+      dependencies.closeGuardHandle ?? closeRegistrationGuardHandle;
+    const readGuardIdentity =
+      dependencies.readGuardIdentity ?? readRegistrationGuardIdentity;
     this.#acquireGuard =
       dependencies.acquireGuard ??
-      ((guardPath) => acquireRegistrationGuard(guardPath, this.#inspectGuard));
+      ((guardPath) =>
+        acquireRegistrationGuard(
+          guardPath,
+          closeGuardHandle,
+          this.#inspectGuard,
+          readGuardIdentity,
+        ));
     this.#publish = dependencies.publish ?? publishRegistrationAtomically;
     this.#temporaryId = dependencies.temporaryId ?? randomUUID;
   }
