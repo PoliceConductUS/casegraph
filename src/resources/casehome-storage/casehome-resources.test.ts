@@ -292,7 +292,7 @@ spec: {}
     expect(snapshot.resolve(nodeBUid).resource.metadata.uid).toBe(nodeBUid);
   });
 
-  test("reads and inspects each reachable UID once without touching an unreferenced directory", async () => {
+  test("inspects each reachable UID once without reading or inspecting an unreferenced directory", async () => {
     const caseHomePath = await createTemporaryCaseHome();
     const rootPath = join(caseHomePath, "root.yaml");
     const nodeAPath = join(caseHomePath, nodeAUid, "root.yaml");
@@ -305,11 +305,8 @@ spec: {}
       testNode(nodeAUid, [nodeBUid, caseUid]),
     );
     await writeNonRoot(caseHomePath, nodeBUid, testNode(nodeBUid, [nodeAUid]));
-    await writeNonRoot(
-      caseHomePath,
-      unreferencedUid,
-      testNode(unreferencedUid),
-    );
+    await mkdir(dirname(unreferencedPath), { recursive: true });
+    await writeFile(unreferencedPath, "metadata: [\n");
     const observed = observeRegistryReads(registry);
 
     const snapshot = await openCaseHomeResources(
@@ -319,7 +316,7 @@ spec: {}
 
     expect(snapshot.count).toBe(3);
     for (const reachablePath of [rootPath, nodeAPath, nodeBPath]) {
-      expect(observed.readCount(reachablePath)).toBe(1);
+      expect(observed.readCount(reachablePath)).toBe(0);
       expect(observed.inspectionCount(reachablePath)).toBe(1);
     }
     expect(observed.readCount(unreferencedPath)).toBe(0);

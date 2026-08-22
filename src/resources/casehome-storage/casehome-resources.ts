@@ -1,19 +1,11 @@
 import { join } from "node:path";
-import { readResourceDocument } from "../resource-document.js";
+import { inspectResourceDocument } from "../resource-document.js";
 import type { ResourceInspection, ResourceRegistry } from "../resource-kind.js";
 import { parseResourceReference, type ResourceUid } from "../resource-uid.js";
 
 export interface CaseHomeResourceSnapshot {
   readonly count: number;
   resolve(value: unknown): ResourceInspection;
-}
-
-async function inspectResourceDocument(
-  resourcePath: string,
-  registry: ResourceRegistry,
-): Promise<ResourceInspection> {
-  const resource = await readResourceDocument(resourcePath, registry);
-  return registry.inspect(resource, resourcePath);
 }
 
 export async function openCaseHomeResources(
