@@ -413,21 +413,58 @@ or fallback publication.
 - **THEN** it removes its owned guard before returning when cleanup succeeds
 - **THEN** no contender removes a guard it did not acquire
 
-#### Scenario: Guard cleanup failure remains visible
+### Requirement: Report Guard Cleanup State Truthfully
 
-- **WHEN** removal of an acquired guard fails after normal or error completion
-- **THEN** the operation reports cleanup failure and the retained guard path
-- **THEN** the result reports whether registry publication already occurred
-- **THEN** the system does not retry, delete other state, use a fallback, or
-  claim clean completion
+The system MUST report the observed guard-path state after cleanup failure as
+`retained`, `absent/ownership-lost`, or `unknown`; it MUST NOT report `retained`
+solely because release or unlink rejected. The report MUST preserve exact
+registry-publication state and any primary diagnostic.
+
+#### Scenario: Acquired guard is observed retained
+
+- **WHEN** release of an acquired guard fails after normal or error completion
+- **AND** guard-state inspection confirms the acquired guard identity remains at
+  `casehomes.yaml.lock`
+- **THEN** the operation reports cleanup failure, the guard path, and state
+  `retained`
+- **THEN** the result preserves exact registry-publication state and any primary
+  diagnostic
+
+#### Scenario: Guard pathname disappears before release
+
+- **WHEN** the acquired guard pathname is removed before release
+- **AND** release fails and guard-state inspection observes no directory entry
+- **THEN** the operation reports cleanup failure, the guard path, and state
+  `absent/ownership-lost`
+- **THEN** it never reports state `retained`
+- **THEN** the result preserves exact registry-publication state and any primary
+  diagnostic
+
+#### Scenario: Distinguishable replacement is not unlinked
+
+- **WHEN** the acquired guard pathname is replaced before release with an entry
+  whose identity is distinguishable from the acquired guard
+- **THEN** the operation leaves the replacement unchanged
+- **THEN** it reports cleanup failure, the guard path, and state
+  `absent/ownership-lost`
+- **THEN** it does not retry, fall back, or unlink the foreign replacement
+
+#### Scenario: Guard-state inspection failure is unknown
+
+- **WHEN** release fails and inspection cannot determine the guard pathname
+  state
+- **THEN** the operation reports cleanup failure, the guard path, and state
+  `unknown`
+- **THEN** it does not infer `retained`, retry, fall back, or claim clean
+  completion
 
 ### Requirement: Preserve Compound Registration Failures
 
 The system MUST preserve compound registration failures. When validation or
 publication fails and removal of the acquired registration guard also fails, it
 MUST report both the original primary diagnostic and the guard-cleanup diagnostic
-without masking either one, together with the retained guard path and exact
-registry-publication state.
+without masking either one, together with the guard path, truthful observed
+guard-state classification, and exact registry-publication state.
 
 #### Scenario: Primary and cleanup failures are both reported
 
@@ -435,7 +472,10 @@ registry-publication state.
 - **AND** removal of its acquired `casehomes.yaml.lock` also fails
 - **THEN** the result reports the original validation or publication diagnostic
 - **THEN** the result separately reports the guard-cleanup diagnostic and
-  retained guard path
+  guard path
+- **THEN** the result reports guard state as `retained`,
+  `absent/ownership-lost`, or `unknown` from observation rather than from the
+  cleanup rejection alone
 - **THEN** the result identifies whether `casehomes.yaml` was published
 - **THEN** neither failure masks the other and the operation does not report
   `"created"`, `"unchanged"`, or clean completion

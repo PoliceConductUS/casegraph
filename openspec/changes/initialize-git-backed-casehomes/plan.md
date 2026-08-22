@@ -111,20 +111,29 @@ YAML, Zod, Vitest, OpenSpec.
   writers can never both report `"created"`.
 
   Cover guard removal after identical no-op, created publication, validation
-  failure, and pre-rename publisher failure. Inject guard cleanup failure before
-  and after registry publication and prove the diagnostic reports the retained
-  guard path plus whether publication occurred, without speculative deletion or
-  recovery. Inject validation failure plus cleanup failure and publication
-  failure plus cleanup failure separately; prove each result retains the exact
-  primary diagnostic, separately reports the cleanup diagnostic and guard path,
-  identifies exact publication state, and returns no false success. Prove a
-  contender never removes the holder's guard.
+  failure, and pre-rename publisher failure. Retain the existing cleanup-failure
+  fixture whose acquired guard remains observable and prove it reports
+  `retained`. Add a fixture that removes the acquired guard pathname before
+  release and prove cleanup reports `absent/ownership-lost`, never `retained`.
+  Inject failure of post-release guard-state inspection and prove cleanup reports
+  `unknown`. Replace the acquired guard with a distinguishable entry and prove
+  the replacement remains byte-identical while cleanup reports
+  `absent/ownership-lost`.
+
+  Run retained, absent/ownership-lost, and unknown cleanup cases both before and
+  after registry publication as applicable. Inject validation failure plus
+  cleanup failure and publication failure plus cleanup failure separately; prove
+  each result retains the exact primary diagnostic, separately reports the
+  cleanup diagnostic and guard path, reports truthful observed guard state,
+  identifies exact publication state, and returns no false success. Assert no
+  retry or fallback and prove a contender never removes the holder's guard.
 
 - [ ] **Step 6: Run the tests and confirm the new registration cases fail**
 
-  Run the Step 2 command. Expected: the new entry-type, target-type, permission,
-  serialization, and cleanup cases fail at their named missing behavior while
-  previously covered parser and uniqueness behavior remains green.
+  Run the Step 2 command. Expected: the new cleanup-state cases fail because the
+  existing implementation treats any release rejection as retained and does not
+  classify absent/ownership-lost or unknown state; previously covered
+  registration behavior remains green.
 
 - [ ] **Step 7: Implement guarded snapshot transaction and atomic rename**
 
@@ -142,12 +151,17 @@ YAML, Zod, Vitest, OpenSpec.
   file for an identical registration, but only after making that decision under
   the guard.
 
-  Remove the owned guard after success and after error. If removal fails, report
-  the retained guard path and whether publication occurred; do not retry, use a
-  fallback, delete other state, or claim clean completion. Never remove a guard
-  this operation did not acquire. When validation/publication and cleanup both
-  fail, preserve the primary diagnostic and add the cleanup diagnostic, retained
-  guard path, and exact publication state without masking either failure.
+  Record a distinguishable identity for the acquired guard. Before unlinking,
+  leave any observably different replacement unchanged. After any release
+  failure, inspect the pathname and classify it as `retained` only when the
+  acquired identity remains, `absent/ownership-lost` when absent or replaced,
+  and `unknown` when inspection fails. Never infer retention solely from release
+  rejection. Preserve whether publication occurred and any primary diagnostic;
+  do not retry, fall back, delete other state, or claim clean completion. When
+  validation/publication and cleanup both fail, preserve the primary diagnostic
+  and add the cleanup diagnostic, guard path, truthful guard-state
+  classification, and exact publication state without masking either failure.
+  Keep this identity handling within cooperative-writer scope.
 
 - [ ] **Step 8: Run registration tests and record GREEN**
 
@@ -540,7 +554,8 @@ YAML, Zod, Vitest, OpenSpec.
   configured-push-versus-writability limitation, and the Task 1 review
   deviation: atomic rename alone did not serialize the snapshot transaction.
   Verification MUST cite the independent-process contention witness, mode and
-  non-regular-entry cases, cleanup-failure retained-state assertions, and dual
+  non-regular-entry cases, `retained`, `absent/ownership-lost`, and `unknown`
+  cleanup assertions, foreign-replacement preservation, and dual
   primary-plus-cleanup diagnostic assertions before Task 1 or the change may be
   accepted.
 

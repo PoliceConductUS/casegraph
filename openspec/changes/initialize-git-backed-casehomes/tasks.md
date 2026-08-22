@@ -1,14 +1,17 @@
 ## 1. Machine Registration
 
-- [x] 1.1 Add focused failing tests for strict `casehomes.yaml` reads,
+- [ ] 1.1 Add focused failing tests for strict `casehomes.yaml` reads,
       canonical real root paths, identical no-op registration, conflicting
       ID/path pairs, inverse root/ID conflicts, malformed mappings, unchanged
       bytes on every rejection, regular registry/root entries, new `0600` and
       replacement-mode preservation, inter-process guard contention and latest
-      snapshot serialization, guard cleanup outcomes, dual primary-plus-cleanup
-      diagnostic preservation, and exclusive atomic publication without retry.
-- [x] 1.2 Implement the smallest injectable registration boundary and make the
-      focused tests pass without changing unrelated CaseHome behavior.
+      snapshot serialization, truthful `retained`, `absent/ownership-lost`, or
+      `unknown` guard cleanup state, foreign-replacement preservation, dual
+      primary-plus-cleanup diagnostic preservation, and exclusive atomic
+      publication without retry.
+- [ ] 1.2 Implement the smallest injectable registration boundary and make the
+      focused tests pass within cooperative-writer scope without changing
+      unrelated CaseHome behavior.
 
 ## 2. Read-Only Primary Repository Inspection
 
@@ -51,5 +54,6 @@
 - [ ] 5.2 Verify Issue #42 acceptance-criteria coverage, complete the OpenSpec
       verification and retrospective artifacts including the Task 1
       inter-process, entry-type, permission, guard-cleanup, and compound-failure
-      evidence, and archive the accepted change before marking the draft pull
-      request ready.
+      evidence, including truthful `retained`, `absent/ownership-lost`, or
+      `unknown` classification, and archive the accepted change before marking
+      the draft pull request ready.

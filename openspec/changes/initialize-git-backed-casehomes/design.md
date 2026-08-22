@@ -174,23 +174,31 @@ new operation after the guard is released; that operation rereads the published
 mapping. A newly created registry has permission mode `0600`. Replacement uses
 the permission bits captured from the existing regular registry entry.
 
-The holder removes its guard after normal completion and after an error. If
-guard cleanup itself fails, the operation reports that failure and the retained
-guard path rather than deleting, retrying, or claiming clean completion. The
-report also preserves whether registry publication already occurred. The
-existing exclusive sibling temporary write and atomic rename remain unchanged;
-there is no retry. An identical ID/path pair performs no registry write, but its
-read and no-op decision still occur while holding the guard. A different path
-for the same ID fails before publication. The inverse is also unique: a root
-already mapped from one canonical ID cannot be mapped from a second canonical
-ID. No alias or default is inferred.
+The holder records a distinguishable identity for the guard it acquired and
+removes that guard after normal completion and after an error. It does not unlink
+a pathname that is observably a different entry. If guard cleanup itself fails,
+the operation inspects the guard pathname and reports state `retained` only when
+the acquired identity is still observed, `absent/ownership-lost` when the entry
+is absent or observably replaced, and `unknown` when state inspection fails. A
+release rejection alone never proves retention. Unexpected disappearance,
+replacement, or unknown state remains a visible failure without retry or
+fallback. The report preserves whether registry publication already occurred
+and any primary diagnostic. This is a cooperative-writer identity check, not an
+adversarial filesystem security framework.
+
+The existing exclusive sibling temporary write and atomic rename remain
+unchanged; there is no retry. An identical ID/path pair performs no registry
+write, but its read and no-op decision still occur while holding the guard. A
+different path for the same ID fails before publication. The inverse is also
+unique: a root already mapped from one canonical ID cannot be mapped from a
+second canonical ID. No alias or default is inferred.
 
 Cleanup is a second failure boundary, not a replacement diagnostic. If
 validation or publication fails and owned-guard removal also fails, the returned
 failure preserves the original validation/publication diagnostic and separately
-reports the cleanup diagnostic, retained guard path, and exact publication
-state. Neither error masks the other, and the operation cannot report
-`"created"`, `"unchanged"`, or clean completion.
+reports the cleanup diagnostic, guard path, truthful observed guard-state
+classification, and exact publication state. Neither error masks the other, and
+the operation cannot report `"created"`, `"unchanged"`, or clean completion.
 
 ### Keep the legacy transition explicit and temporary
 
