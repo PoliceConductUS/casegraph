@@ -23,7 +23,7 @@ export interface GitRemoteReport {
   readonly pushUrls: readonly string[];
 }
 
-interface RepositoryDetails {
+interface WorktreeRepositoryDetails {
   readonly gitDirectory: string;
   readonly commonDirectory: string;
   readonly topLevel?: string;
@@ -41,18 +41,32 @@ export type RepositoryReport =
   | { readonly state: "absent" }
   | { readonly state: "not-inspected"; readonly diagnostic: string }
   | { readonly state: "unavailable"; readonly diagnostic: string }
-  | ({ readonly state: "primary" } & RepositoryDetails)
+  | ({ readonly state: "primary" } & WorktreeRepositoryDetails)
   | ({
       readonly state: "inherited";
       readonly expectedTopLevel: string;
       readonly inheritedTopLevel: string;
-    } & RepositoryDetails)
+    } & WorktreeRepositoryDetails)
+  | {
+      readonly state: "ineligible";
+      readonly reason: "bare";
+      readonly bare: true;
+      readonly gitDirectory: string;
+      readonly commonDirectory: string;
+      readonly commit?: string;
+      readonly unborn: boolean;
+      readonly branch?: string;
+      readonly detached: boolean;
+      readonly upstream?: string;
+      readonly remotes: readonly GitRemoteReport[];
+    }
   | ({
       readonly state: "ineligible";
-      readonly bare: boolean;
+      readonly reason: "gitfile" | "mismatched-top-level";
+      readonly bare: false;
       readonly expectedTopLevel: string;
       readonly gitFile?: string;
-    } & RepositoryDetails);
+    } & WorktreeRepositoryDetails);
 
 export type CaseHomeResourceReport =
   | { readonly state: "absent" }
@@ -62,6 +76,7 @@ export type CaseHomeResourceReport =
 
 export type RegistrationReport =
   | { readonly state: "absent" }
+  | { readonly state: "not-inspected"; readonly diagnostic: string }
   | { readonly state: "current"; readonly registeredRoot: string }
   | { readonly state: "different"; readonly registeredRoot: string }
   | {
@@ -88,12 +103,21 @@ export interface CaseHomeRepositoryReport {
   readonly resource: CaseHomeResourceReport;
   readonly repository: RepositoryReport;
   readonly registration: RegistrationReport;
-  readonly structuralPushTarget: {
-    readonly ready: boolean;
-    readonly remote?: string;
-    readonly pushUrls: readonly string[];
-    readonly provesWritability: false;
-  };
+  readonly structuralPushTarget:
+    | {
+        readonly state: "known";
+        readonly ready: boolean;
+        readonly remote?: string;
+        readonly pushUrls: readonly string[];
+        readonly provesWritability: false;
+      }
+    | {
+        readonly state: "not-inspected" | "unavailable";
+        readonly ready: false;
+        readonly remote?: string;
+        readonly diagnostic: string;
+        readonly provesWritability: false;
+      };
   readonly registrationEligibility: {
     readonly eligible: boolean;
     readonly reasons: readonly string[];
@@ -107,7 +131,16 @@ export interface CaseHomeRepositoryReport {
     readonly paths: readonly string[];
     readonly resourceCount?: number;
     readonly commit?: string;
-    readonly remotes: readonly GitRemoteReport[];
+    readonly repositoryDiagnostic?: string;
+    readonly remotes:
+      | {
+          readonly state: "known";
+          readonly remotes: readonly GitRemoteReport[];
+        }
+      | {
+          readonly state: "not-inspected" | "unavailable";
+          readonly diagnostic: string;
+        };
     readonly registration: RegistrationReport["state"];
   };
 }
@@ -140,13 +173,26 @@ function lines(value: string): readonly string[] {
     .filter((line) => line.length > 0);
 }
 
-async function gitValue(
+function commandDiagnostic(
+  args: readonly string[],
+  result: { readonly exitCode: number; readonly stderr: string },
+): string {
+  const stderr = result.stderr.trim();
+  return `Git command \`git ${args.join(" ")}\` failed with exit ${String(result.exitCode)}${stderr.length === 0 ? "" : `: ${stderr}`}`;
+}
+
+async function requiredGitValue(
   git: GitRunner,
   cwd: string,
   args: readonly string[],
-): Promise<string | undefined> {
+): Promise<
+  | { readonly state: "success"; readonly value: string }
+  | { readonly state: "failure"; readonly diagnostic: string }
+> {
   const result = await git(args, cwd);
-  return result.exitCode === 0 ? result.stdout.trim() : undefined;
+  return result.exitCode === 0
+    ? { state: "success", value: result.stdout.trim() }
+    : { state: "failure", diagnostic: commandDiagnostic(args, result) };
 }
 
 function canonicalGitPath(value: string, cwd: string): string {
@@ -156,22 +202,40 @@ function canonicalGitPath(value: string, cwd: string): string {
 async function inspectRemotes(
   git: GitRunner,
   cwd: string,
-): Promise<readonly GitRemoteReport[]> {
-  const names = lines((await git(["remote"], cwd)).stdout);
-  return Promise.all(
-    names.map(async (name) => {
-      const fetch = await git(["remote", "get-url", "--all", name], cwd);
-      const push = await git(
-        ["remote", "get-url", "--push", "--all", name],
-        cwd,
-      );
-      return {
-        name,
-        fetchUrls: fetch.exitCode === 0 ? lines(fetch.stdout) : [],
-        pushUrls: push.exitCode === 0 ? lines(push.stdout) : [],
-      };
-    }),
-  );
+): Promise<
+  | { readonly state: "success"; readonly remotes: readonly GitRemoteReport[] }
+  | { readonly state: "failure"; readonly diagnostic: string }
+> {
+  const namesResult = await requiredGitValue(git, cwd, ["remote"]);
+  if (namesResult.state === "failure") return namesResult;
+  const remotes: GitRemoteReport[] = [];
+  for (const name of lines(namesResult.value)) {
+    const fetch = await requiredGitValue(git, cwd, [
+      "remote",
+      "get-url",
+      "--all",
+      name,
+    ]);
+    if (fetch.state === "failure") return fetch;
+    const push = await requiredGitValue(git, cwd, [
+      "remote",
+      "get-url",
+      "--push",
+      "--all",
+      name,
+    ]);
+    if (push.state === "failure") return push;
+    remotes.push({
+      name,
+      fetchUrls: lines(fetch.value),
+      pushUrls: lines(push.value),
+    });
+  }
+  return { state: "success", remotes };
+}
+
+function unavailable(diagnostic: string): RepositoryReport {
+  return { state: "unavailable", diagnostic };
 }
 
 async function inspectRepository(
@@ -182,78 +246,157 @@ async function inspectRepository(
     | { readonly isDirectory: boolean; readonly isFile: boolean }
     | undefined,
 ): Promise<RepositoryReport> {
-  const gitDirectoryValue = await gitValue(git, cwd, [
-    "rev-parse",
-    "--absolute-git-dir",
-  ]);
-  if (gitDirectoryValue === undefined) return { state: "absent" };
+  const absoluteGitDirectoryArgs = ["rev-parse", "--absolute-git-dir"] as const;
+  const gitDirectoryResult = await git(absoluteGitDirectoryArgs, cwd);
+  if (gitDirectoryResult.exitCode !== 0) {
+    const stderrLines = lines(gitDirectoryResult.stderr);
+    if (
+      gitEntry === undefined &&
+      gitDirectoryResult.exitCode === 128 &&
+      gitDirectoryResult.stdout.trim() === "" &&
+      stderrLines.length === 1 &&
+      stderrLines[0]?.startsWith("fatal: not a git repository")
+    ) {
+      return { state: "absent" };
+    }
+    return unavailable(
+      commandDiagnostic(absoluteGitDirectoryArgs, gitDirectoryResult),
+    );
+  }
+  const gitDirectoryValue = gitDirectoryResult.stdout.trim();
+  if (gitDirectoryValue.length === 0)
+    return unavailable(
+      "Git command `git rev-parse --absolute-git-dir` returned an empty Git directory",
+    );
 
-  const commonDirectoryValue = await gitValue(git, cwd, [
+  const commonDirectoryResult = await requiredGitValue(git, cwd, [
     "rev-parse",
     "--path-format=absolute",
     "--git-common-dir",
   ]);
+  if (commonDirectoryResult.state === "failure")
+    return unavailable(commonDirectoryResult.diagnostic);
+  if (commonDirectoryResult.value.length === 0)
+    return unavailable(
+      "Git command `git rev-parse --path-format=absolute --git-common-dir` returned an empty common directory",
+    );
   const gitDirectory = canonicalGitPath(gitDirectoryValue, cwd);
-  const commonDirectory = canonicalGitPath(
-    commonDirectoryValue ?? gitDirectory,
-    cwd,
-  );
-  const bare =
-    (await gitValue(git, cwd, ["rev-parse", "--is-bare-repository"])) ===
-    "true";
-  const topLevelValue = await gitValue(git, cwd, [
+  const commonDirectory = canonicalGitPath(commonDirectoryResult.value, cwd);
+  const bareResult = await requiredGitValue(git, cwd, [
+    "rev-parse",
+    "--is-bare-repository",
+  ]);
+  if (bareResult.state === "failure") return unavailable(bareResult.diagnostic);
+  if (bareResult.value !== "true" && bareResult.value !== "false")
+    return unavailable(
+      `Git command \`git rev-parse --is-bare-repository\` returned unexpected value ${JSON.stringify(bareResult.value)}`,
+    );
+  const bare = bareResult.value === "true";
+
+  const headArgs = ["rev-parse", "--verify", "--quiet", "HEAD"] as const;
+  const headResult = await git(headArgs, cwd);
+  let commit: string | undefined;
+  if (headResult.exitCode === 0) commit = headResult.stdout.trim();
+  else if (
+    headResult.exitCode !== 1 ||
+    headResult.stdout.trim() !== "" ||
+    headResult.stderr.trim() !== ""
+  )
+    return unavailable(commandDiagnostic(headArgs, headResult));
+
+  const branchResult = await requiredGitValue(git, cwd, [
+    "branch",
+    "--show-current",
+  ]);
+  if (branchResult.state === "failure")
+    return unavailable(branchResult.diagnostic);
+  const branch = branchResult.value || undefined;
+  const upstreamArgs =
+    branch === undefined
+      ? (["for-each-ref", "--format=%(upstream:short)", "HEAD"] as const)
+      : ([
+          "for-each-ref",
+          "--format=%(upstream:short)",
+          `refs/heads/${branch}`,
+        ] as const);
+  const upstreamResult = await requiredGitValue(git, cwd, upstreamArgs);
+  if (upstreamResult.state === "failure")
+    return unavailable(upstreamResult.diagnostic);
+  const upstream = upstreamResult.value || undefined;
+
+  if (bare) {
+    const remoteResult = await inspectRemotes(git, cwd);
+    if (remoteResult.state === "failure")
+      return unavailable(remoteResult.diagnostic);
+    return {
+      state: "ineligible",
+      reason: "bare",
+      bare: true,
+      gitDirectory,
+      commonDirectory,
+      ...(commit === undefined ? {} : { commit }),
+      unborn: commit === undefined,
+      branch,
+      detached: branch === undefined && commit !== undefined,
+      upstream,
+      remotes: remoteResult.remotes,
+    };
+  }
+
+  const topLevelResult = await requiredGitValue(git, cwd, [
     "rev-parse",
     "--show-toplevel",
   ]);
-  const topLevel =
-    topLevelValue === undefined
-      ? undefined
-      : canonicalGitPath(topLevelValue, cwd);
-  const commit = await gitValue(git, cwd, ["rev-parse", "--verify", "HEAD"]);
-  const branch = await gitValue(git, cwd, [
-    "symbolic-ref",
-    "--quiet",
-    "--short",
-    "HEAD",
+  if (topLevelResult.state === "failure")
+    return unavailable(topLevelResult.diagnostic);
+  if (topLevelResult.value.length === 0)
+    return unavailable(
+      "Git command `git rev-parse --show-toplevel` returned an empty top-level path",
+    );
+  const topLevel = canonicalGitPath(topLevelResult.value, cwd);
+  const statusResult = await requiredGitValue(git, cwd, [
+    "status",
+    "--porcelain=v1",
   ]);
-  const status = await git(["status", "--porcelain=v1"], cwd);
-  const rootEntry =
-    commit === undefined
-      ? undefined
-      : await gitValue(git, cwd, [
-          "ls-tree",
-          "--name-only",
-          "HEAD",
-          "--",
-          "root.yaml",
-        ]);
-  const upstream = await gitValue(git, cwd, [
-    "rev-parse",
-    "--abbrev-ref",
-    "--symbolic-full-name",
-    "@{upstream}",
-  ]);
-  const remotes = await inspectRemotes(git, cwd);
-  const details: RepositoryDetails = {
+  if (statusResult.state === "failure")
+    return unavailable(statusResult.diagnostic);
+  let rootEntry: string | undefined;
+  if (commit !== undefined) {
+    const rootResult = await requiredGitValue(git, cwd, [
+      "ls-tree",
+      "--name-only",
+      "HEAD",
+      "--",
+      "root.yaml",
+    ]);
+    if (rootResult.state === "failure")
+      return unavailable(rootResult.diagnostic);
+    rootEntry = rootResult.value;
+  }
+  const remoteResult = await inspectRemotes(git, cwd);
+  if (remoteResult.state === "failure")
+    return unavailable(remoteResult.diagnostic);
+  const details: WorktreeRepositoryDetails = {
     gitDirectory,
     commonDirectory,
     topLevel,
     branch,
     detached: branch === undefined && commit !== undefined,
     unborn: commit === undefined,
-    dirty: status.exitCode !== 0 || status.stdout.length > 0,
+    dirty: statusResult.value.length > 0,
     commit,
     rootTrackedInHead: rootEntry === "root.yaml",
     upstream,
-    remotes,
+    remotes: remoteResult.remotes,
   };
 
-  if (bare || gitEntry?.isFile === true) {
+  if (gitEntry?.isFile === true) {
     return {
       state: "ineligible",
+      reason: "gitfile",
       expectedTopLevel,
-      bare,
-      gitFile: gitEntry?.isFile === true ? path.join(cwd, ".git") : undefined,
+      bare: false,
+      gitFile: path.join(cwd, ".git"),
       ...details,
     };
   }
@@ -262,22 +405,24 @@ async function inspectRepository(
       return {
         state: "inherited",
         expectedTopLevel,
-        inheritedTopLevel: topLevel ?? gitDirectory,
+        inheritedTopLevel: topLevel,
         ...details,
       };
     }
     return {
       state: "ineligible",
+      reason: "mismatched-top-level",
       expectedTopLevel,
-      bare,
+      bare: false,
       ...details,
     };
   }
   if (gitEntry?.isDirectory !== true) {
     return {
       state: "ineligible",
+      reason: "mismatched-top-level",
       expectedTopLevel,
-      bare,
+      bare: false,
       ...details,
     };
   }
@@ -400,16 +545,13 @@ export async function inspectGitBackedCaseHome(
     const message = `Exact CaseHome child ${caseHome} is a ${kind}`;
     const resourceDiagnostic = `Strict CaseHome resources were not inspected because ${message}`;
     const repositoryDiagnostic = `Repository was not inspected because ${message}`;
-    const registration = await inspectRegistration(
-      registrationStore,
-      input.configHome,
-      input.caseId,
-      root,
-    );
+    const registrationDiagnostic = `Machine registration was not inspected because ${message}`;
+    const registration: RegistrationReport = {
+      state: "not-inspected",
+      diagnostic: registrationDiagnostic,
+    };
     recoveryPaths.push(caseHome);
-    const registrationReason = registrationConflictReason(registration);
     const reasons = [message];
-    if (registrationReason !== undefined) reasons.push(registrationReason);
     return deepFreeze({
       classification: "conflict",
       paths,
@@ -420,8 +562,9 @@ export async function inspectGitBackedCaseHome(
       },
       registration,
       structuralPushTarget: {
+        state: "not-inspected",
         ready: false,
-        pushUrls: [],
+        diagnostic: repositoryDiagnostic,
         provesWritability: false,
       },
       registrationEligibility: { eligible: false, reasons },
@@ -430,11 +573,14 @@ export async function inspectGitBackedCaseHome(
         message,
         resourceDiagnostic,
         repositoryDiagnostic,
-        ...(registration.state === "invalid" ? [registration.diagnostic] : []),
+        registrationDiagnostic,
       ],
       recovery: {
         paths: recoveryPaths,
-        remotes: [],
+        remotes: {
+          state: "not-inspected",
+          diagnostic: repositoryDiagnostic,
+        },
         registration: registration.state,
       },
     });
@@ -451,58 +597,70 @@ export async function inspectGitBackedCaseHome(
           ? await inspectRepository(git, caseFolder, caseHome, undefined)
           : ({ state: "absent" } as const);
     const inherited = repository.state === "inherited";
+    const repositoryUnavailable = repository.state === "unavailable";
+    const repositoryReason =
+      gitUnavailableDiagnostic !== undefined
+        ? "Git is unavailable"
+        : repositoryUnavailable
+          ? repository.diagnostic
+          : "repository is not an exact primary checkout";
     const registration = await inspectRegistration(
       registrationStore,
       input.configHome,
       input.caseId,
       root,
     );
+    const structuralPushTarget: CaseHomeRepositoryReport["structuralPushTarget"] =
+      repository.state === "unavailable"
+        ? {
+            state: "unavailable",
+            ready: false,
+            diagnostic: repository.diagnostic,
+            provesWritability: false,
+          }
+        : {
+            state: "known",
+            ready: false,
+            pushUrls: [],
+            provesWritability: false,
+          };
     return deepFreeze({
-      classification:
-        gitUnavailableDiagnostic !== undefined
-          ? "unavailable"
-          : inherited
-            ? "inherited"
-            : "absent",
+      classification: repositoryUnavailable
+        ? "unavailable"
+        : inherited
+          ? "inherited"
+          : "absent",
       paths,
       resource: { state: "absent" },
       repository,
       registration,
-      structuralPushTarget: {
-        ready: false,
-        pushUrls: [],
-        provesWritability: false,
-      },
+      structuralPushTarget,
       registrationEligibility: {
         eligible: false,
-        reasons: [
-          gitUnavailableDiagnostic === undefined
-            ? "repository is not an exact primary checkout"
-            : "Git is unavailable",
-        ],
+        reasons: [repositoryReason],
       },
       mutationReadiness: {
         ready: false,
-        reasons: [
-          gitUnavailableDiagnostic === undefined
-            ? "repository is not an exact primary checkout"
-            : "Git is unavailable",
-        ],
+        reasons: [repositoryReason],
       },
-      diagnostics:
-        registration.state === "invalid"
-          ? [
-              ...(gitUnavailableDiagnostic === undefined
-                ? []
-                : [gitUnavailableDiagnostic]),
-              registration.diagnostic,
-            ]
-          : gitUnavailableDiagnostic === undefined
-            ? []
-            : [gitUnavailableDiagnostic],
+      diagnostics: [
+        ...(repositoryUnavailable ? [repository.diagnostic] : []),
+        ...(registration.state === "invalid" ? [registration.diagnostic] : []),
+      ],
       recovery: {
         paths: recoveryPaths,
-        remotes: repository.state === "inherited" ? repository.remotes : [],
+        ...(repository.state === "unavailable"
+          ? { repositoryDiagnostic: repository.diagnostic }
+          : {}),
+        remotes:
+          repository.state === "inherited"
+            ? { state: "known", remotes: repository.remotes }
+            : repository.state === "unavailable"
+              ? {
+                  state: "unavailable",
+                  diagnostic: repository.diagnostic,
+                }
+              : { state: "known", remotes: [] },
         registration: registration.state,
       },
     });
@@ -563,14 +721,29 @@ export async function inspectGitBackedCaseHome(
     (remote) => remote.name === input.selectedRemote,
   );
   const structuralPushTarget = {
-    ready: selected !== undefined && selected.pushUrls.length > 0,
-    remote: input.selectedRemote,
-    pushUrls: selected?.pushUrls ?? [],
-    provesWritability: false as const,
+    ...(repository.state === "unavailable"
+      ? {
+          state: "unavailable" as const,
+          ready: false as const,
+          remote: input.selectedRemote,
+          diagnostic: repository.diagnostic,
+          provesWritability: false as const,
+        }
+      : {
+          state: "known" as const,
+          ready: selected !== undefined && selected.pushUrls.length > 0,
+          remote: input.selectedRemote,
+          pushUrls: selected?.pushUrls ?? [],
+          provesWritability: false as const,
+        }),
   };
   const registrationReasons: string[] = [];
   if (repository.state === "unavailable") {
-    registrationReasons.push("Git is unavailable");
+    registrationReasons.push(
+      gitUnavailableDiagnostic === undefined
+        ? repository.diagnostic
+        : "Git is unavailable",
+    );
     if (resource.state !== "valid")
       registrationReasons.push("strict CaseHome resources are invalid");
   } else if (repository.state !== "primary") {
@@ -587,7 +760,11 @@ export async function inspectGitBackedCaseHome(
     registrationReasons.push(registrationReason);
   const mutationReasons: string[] = [];
   if (repository.state === "unavailable") {
-    mutationReasons.push("Git is unavailable");
+    mutationReasons.push(
+      gitUnavailableDiagnostic === undefined
+        ? repository.diagnostic
+        : "Git is unavailable",
+    );
     if (resource.state !== "valid")
       mutationReasons.push("strict CaseHome resources are invalid");
   } else if (repository.state !== "primary") {
@@ -608,7 +785,7 @@ export async function inspectGitBackedCaseHome(
     diagnostics.push(repository.diagnostic);
   if (repository.state === "ineligible") {
     diagnostics.push(
-      repository.bare
+      repository.reason === "bare"
         ? `Exact CaseHome repository at ${canonicalHome} is bare`
         : repository.gitFile !== undefined
           ? `Exact CaseHome uses an ineligible gitfile at ${repository.gitFile}`
@@ -650,13 +827,19 @@ export async function inspectGitBackedCaseHome(
     recovery: {
       paths: recoveryPaths,
       resourceCount: resource.state === "valid" ? resource.count : undefined,
-      commit:
-        repository.state === "primary" ||
-        repository.state === "inherited" ||
-        repository.state === "ineligible"
-          ? repository.commit
-          : undefined,
-      remotes,
+      ...(repository.state !== "absent" &&
+      repository.state !== "not-inspected" &&
+      repository.state !== "unavailable" &&
+      repository.commit !== undefined
+        ? { commit: repository.commit }
+        : {}),
+      ...(repository.state === "unavailable"
+        ? { repositoryDiagnostic: repository.diagnostic }
+        : {}),
+      remotes:
+        repository.state === "unavailable"
+          ? { state: "unavailable", diagnostic: repository.diagnostic }
+          : { state: "known", remotes },
       registration: registration.state,
     },
   });

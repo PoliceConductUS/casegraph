@@ -257,16 +257,29 @@ describe("exact CaseHome candidate inspection", () => {
       `PoliceConductUS/link: ${await realpath(registered.rootPath)}\n`,
     );
 
-    const fileReport = await inspectGitBackedCaseHome({
-      caseFolder: fileFolder,
-      caseId: "PoliceConductUS/file",
-      configHome: fileConfig,
-    });
-    const symlinkReport = await inspectGitBackedCaseHome({
-      caseFolder: symlinkFolder,
-      caseId: "PoliceConductUS/link",
-      configHome: symlinkConfig,
-    });
+    let registrationReads = 0;
+    const registrationStore = {
+      read: () => {
+        registrationReads += 1;
+        throw new Error("registration must not be inspected");
+      },
+    };
+    const fileReport = await inspectGitBackedCaseHome(
+      {
+        caseFolder: fileFolder,
+        caseId: "PoliceConductUS/file",
+        configHome: fileConfig,
+      },
+      { registrationStore },
+    );
+    const symlinkReport = await inspectGitBackedCaseHome(
+      {
+        caseFolder: symlinkFolder,
+        caseId: "PoliceConductUS/link",
+        configHome: symlinkConfig,
+      },
+      { registrationStore },
+    );
 
     for (const [report, caseFolder, kind] of [
       [fileReport, fileFolder, "non-directory file"],
@@ -278,10 +291,8 @@ describe("exact CaseHome candidate inspection", () => {
       const identityDiagnostic = `Exact CaseHome child ${caseHome} is a ${kind}`;
       const resourceDiagnostic = `Strict CaseHome resources were not inspected because ${identityDiagnostic}`;
       const repositoryDiagnostic = `Repository was not inspected because ${identityDiagnostic}`;
-      const readinessReasons = [
-        identityDiagnostic,
-        "case ID is already registered to a different root",
-      ];
+      const registrationDiagnostic = `Machine registration was not inspected because ${identityDiagnostic}`;
+      const readinessReasons = [identityDiagnostic];
 
       expect(report).toEqual({
         classification: "conflict",
@@ -292,12 +303,13 @@ describe("exact CaseHome candidate inspection", () => {
           diagnostic: repositoryDiagnostic,
         },
         registration: {
-          state: "different",
-          registeredRoot: await realpath(registered.rootPath),
+          state: "not-inspected",
+          diagnostic: registrationDiagnostic,
         },
         structuralPushTarget: {
+          state: "not-inspected",
           ready: false,
-          pushUrls: [],
+          diagnostic: repositoryDiagnostic,
           provesWritability: false,
         },
         registrationEligibility: {
@@ -309,14 +321,19 @@ describe("exact CaseHome candidate inspection", () => {
           identityDiagnostic,
           resourceDiagnostic,
           repositoryDiagnostic,
+          registrationDiagnostic,
         ],
         recovery: {
           paths: [canonicalFolder, caseHome],
-          remotes: [],
-          registration: "different",
+          remotes: {
+            state: "not-inspected",
+            diagnostic: repositoryDiagnostic,
+          },
+          registration: "not-inspected",
         },
       });
     }
+    expect(registrationReads).toBe(0);
     expect(JSON.stringify(symlinkReport)).not.toContain(
       "SECRET MUST NOT BE READ",
     );
@@ -407,6 +424,7 @@ describe("exact primary Git repository reports", () => {
       { name: "beta", fetchUrls: [beta], pushUrls: [beta] },
     ]);
     expect(report.structuralPushTarget).toEqual({
+      state: "known",
       ready: true,
       remote: "alpha",
       pushUrls: [alphaPush, alphaPushMirror],
@@ -538,6 +556,7 @@ describe("exact primary Git repository reports", () => {
       reasons: ["repository has no commit", "root.yaml is not tracked in HEAD"],
     });
     expect(unbornReport.structuralPushTarget).toEqual({
+      state: "known",
       ready: false,
       remote: undefined,
       pushUrls: [],
@@ -666,7 +685,10 @@ describe("ineligible and invalid candidates", () => {
       });
       expect(report.classification).toBe("conflict");
       expect(report.repository.state).toBe("ineligible");
-      if (report.repository.state !== "ineligible") {
+      if (
+        report.repository.state !== "ineligible" ||
+        report.repository.reason !== "gitfile"
+      ) {
         throw new Error("expected an ineligible gitfile checkout");
       }
       expect(report.repository.gitFile).toBe(
@@ -884,9 +906,10 @@ describe("ineligible and invalid candidates", () => {
       if (registrationState === "absent")
         expect(report.registration).toEqual({ state: "absent" });
       expect(report.structuralPushTarget).toEqual({
+        state: "unavailable",
         ready: false,
         remote: "origin",
-        pushUrls: [],
+        diagnostic: gitDiagnostic,
         provesWritability: false,
       });
       expect(report.registrationEligibility).toEqual({
@@ -923,8 +946,8 @@ describe("ineligible and invalid candidates", () => {
               ? [canonicalFolder, canonicalHome, canonicalRoot]
               : [canonicalFolder, canonicalHome],
         resourceCount: resourceState === "valid" ? 2 : undefined,
-        commit: undefined,
-        remotes: [],
+        repositoryDiagnostic: gitDiagnostic,
+        remotes: { state: "unavailable", diagnostic: gitDiagnostic },
         registration: registrationState,
       });
       expect(observed).toEqual([
@@ -1038,5 +1061,391 @@ describe("Git runner boundary", () => {
       ]),
     ).toBe(true);
     expect(containsMutation(normalized)).toBe(false);
+  });
+});
+
+describe("required Git result classification", () => {
+  const success = (stdout = "") => ({ exitCode: 0, stderr: "", stdout });
+
+  test.each([
+    ["absolute git directory", "rev-parse --absolute-git-dir"],
+    ["common directory", "rev-parse --path-format=absolute --git-common-dir"],
+    ["bare state", "rev-parse --is-bare-repository"],
+    ["top level", "rev-parse --show-toplevel"],
+    ["HEAD", "rev-parse --verify --quiet HEAD"],
+    ["branch", "branch --show-current"],
+    ["status", "status --porcelain=v1"],
+    ["tracked root", "ls-tree --name-only HEAD -- root.yaml"],
+    ["upstream", "for-each-ref --format=%(upstream:short) refs/heads/main"],
+    ["remote names", "remote"],
+    ["fetch URL", "remote get-url --all origin"],
+    ["push URL", "remote get-url --push --all origin"],
+  ] as const)(
+    "makes a failed %s command unavailable",
+    async (_name, failed) => {
+      const fixture = await createCaseHome({ root: strictCaseRoot() });
+      await mkdir(path.join(fixture.caseHome, ".git"));
+      const canonicalHome = await realpath(fixture.caseHome);
+      const commands: string[] = [];
+      const runner: GitRunner = (args) => {
+        const command = args.slice(1).join(" ");
+        commands.push(command);
+        if (command === failed)
+          return Promise.resolve({
+            exitCode: 73,
+            stderr: "injected required-command failure\n",
+            stdout: "",
+          });
+        const outputs: Record<string, string> = {
+          "--version": "git version test\n",
+          "rev-parse --absolute-git-dir": `${path.join(canonicalHome, ".git")}\n`,
+          "rev-parse --path-format=absolute --git-common-dir": `${path.join(canonicalHome, ".git")}\n`,
+          "rev-parse --is-bare-repository": "false\n",
+          "rev-parse --show-toplevel": `${canonicalHome}\n`,
+          "rev-parse --verify --quiet HEAD": `${"a".repeat(40)}\n`,
+          "branch --show-current": "main\n",
+          "status --porcelain=v1": "",
+          "ls-tree --name-only HEAD -- root.yaml": "root.yaml\n",
+          "for-each-ref --format=%(upstream:short) refs/heads/main": "",
+          remote: "origin\n",
+          "remote get-url --all origin": "fetch.example\n",
+          "remote get-url --push --all origin": "push.example\n",
+        };
+        return Promise.resolve(success(outputs[command] ?? ""));
+      };
+
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder: fixture.caseFolder,
+          caseId: "PoliceConductUS/required-command",
+          configHome: fixture.configHome,
+          selectedRemote: "origin",
+        },
+        { git: runner },
+      );
+
+      expect(report.classification).toBe("unavailable");
+      expect(report.repository).toMatchObject({ state: "unavailable" });
+      if (report.repository.state !== "unavailable")
+        throw new Error("expected unavailable repository");
+      expect(report.repository.diagnostic).toContain(failed);
+      expect(report.repository.diagnostic).toContain("exit 73");
+      expect(report.repository.diagnostic).toContain(
+        "injected required-command failure",
+      );
+      expect(report.structuralPushTarget).toEqual({
+        state: "unavailable",
+        ready: false,
+        remote: "origin",
+        diagnostic: report.repository.diagnostic,
+        provesWritability: false,
+      });
+      expect(report.recovery.remotes).toEqual({
+        state: "unavailable",
+        diagnostic: report.repository.diagnostic,
+      });
+      expect(report.recovery).toMatchObject({
+        repositoryDiagnostic: report.repository.diagnostic,
+      });
+      expect(report.registrationEligibility.reasons).toContain(
+        report.repository.diagnostic,
+      );
+      expect(report.mutationReadiness.reasons).toContain(
+        report.repository.diagnostic,
+      );
+      expect(commands.at(-1)).toBe(failed);
+    },
+  );
+
+  test.each([
+    [127, "", "fatal: not a git repository\n"],
+    [128, "unexpected", "fatal: not a git repository\n"],
+    [128, "", "permission denied\n"],
+    [128, "", "fatal: not a git repository\nsecond line\n"],
+  ] as const)(
+    "does not treat mismatched no-repository tuple %s/%s/%s as absent",
+    async (exitCode, stdout, stderr) => {
+      const fixture = await createCaseHome({ root: strictCaseRoot() });
+      const runner: GitRunner = (args) =>
+        Promise.resolve(
+          args.slice(1).join(" ") === "--version"
+            ? success("git version test\n")
+            : { exitCode, stdout, stderr },
+        );
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder: fixture.caseFolder,
+          caseId: "PoliceConductUS/no-repository-tuple",
+          configHome: fixture.configHome,
+        },
+        { git: runner },
+      );
+      expect(report.classification).toBe("unavailable");
+      expect(report.repository.state).toBe("unavailable");
+    },
+  );
+
+  test("does not accept the no-repository tuple when the exact .git entry exists", async () => {
+    const fixture = await createCaseHome({ root: strictCaseRoot() });
+    await mkdir(path.join(fixture.caseHome, ".git"));
+    const runner: GitRunner = (args) =>
+      Promise.resolve(
+        args.slice(1).join(" ") === "--version"
+          ? success("git version test\n")
+          : {
+              exitCode: 128,
+              stdout: "",
+              stderr: "fatal: not a git repository\n",
+            },
+      );
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder: fixture.caseFolder,
+        caseId: "PoliceConductUS/no-repository-precondition",
+        configHome: fixture.configHome,
+      },
+      { git: runner },
+    );
+    expect(report.repository.state).toBe("unavailable");
+  });
+
+  test.each([
+    [2, "", ""],
+    [1, "unexpected", ""],
+    [1, "", "unexpected"],
+  ] as const)(
+    "does not treat mismatched unborn tuple %s/%s/%s as unborn",
+    async (exitCode, stdout, stderr) => {
+      const fixture = await createCaseHome({ root: strictCaseRoot() });
+      await mkdir(path.join(fixture.caseHome, ".git"));
+      const canonicalHome = await realpath(fixture.caseHome);
+      const runner: GitRunner = (args) => {
+        const command = args.slice(1).join(" ");
+        const outputs: Record<string, string> = {
+          "--version": "git version test\n",
+          "rev-parse --absolute-git-dir": `${path.join(canonicalHome, ".git")}\n`,
+          "rev-parse --path-format=absolute --git-common-dir": `${path.join(canonicalHome, ".git")}\n`,
+          "rev-parse --is-bare-repository": "false\n",
+          "branch --show-current": "main\n",
+          "for-each-ref --format=%(upstream:short) refs/heads/main": "",
+          "rev-parse --show-toplevel": `${canonicalHome}\n`,
+          "status --porcelain=v1": "",
+          remote: "",
+        };
+        return Promise.resolve(
+          command === "rev-parse --verify --quiet HEAD"
+            ? { exitCode, stdout, stderr }
+            : success(outputs[command] ?? ""),
+        );
+      };
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder: fixture.caseFolder,
+          caseId: "PoliceConductUS/unborn-tuple",
+          configHome: fixture.configHome,
+        },
+        { git: runner },
+      );
+      expect(report.repository.state).toBe("unavailable");
+    },
+  );
+
+  test("discards an earlier remote when a later URL query fails", async () => {
+    const fixture = await createCaseHome({ root: strictCaseRoot() });
+    await mkdir(path.join(fixture.caseHome, ".git"));
+    const canonicalHome = await realpath(fixture.caseHome);
+    const runner: GitRunner = (args) => {
+      const command = args.slice(1).join(" ");
+      if (command === "remote get-url --all beta")
+        return Promise.resolve({
+          exitCode: 9,
+          stderr: "later remote failed\n",
+          stdout: "",
+        });
+      const outputs: Record<string, string> = {
+        "--version": "git version test\n",
+        "rev-parse --absolute-git-dir": `${path.join(canonicalHome, ".git")}\n`,
+        "rev-parse --path-format=absolute --git-common-dir": `${path.join(canonicalHome, ".git")}\n`,
+        "rev-parse --is-bare-repository": "false\n",
+        "rev-parse --show-toplevel": `${canonicalHome}\n`,
+        "rev-parse --verify --quiet HEAD": `${"a".repeat(40)}\n`,
+        "branch --show-current": "main\n",
+        "status --porcelain=v1": "",
+        "ls-tree --name-only HEAD -- root.yaml": "root.yaml\n",
+        "for-each-ref --format=%(upstream:short) refs/heads/main": "",
+        remote: "alpha\nbeta\n",
+        "remote get-url --all alpha": "alpha-fetch\n",
+        "remote get-url --push --all alpha": "alpha-push\n",
+      };
+      return Promise.resolve(success(outputs[command] ?? ""));
+    };
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder: fixture.caseFolder,
+        caseId: "PoliceConductUS/atomic-remotes",
+        configHome: fixture.configHome,
+      },
+      { git: runner },
+    );
+    expect(report.repository).toMatchObject({ state: "unavailable" });
+    expect(report.structuralPushTarget).not.toHaveProperty("pushUrls");
+    expect(report.recovery.remotes).not.toHaveProperty("remotes");
+    expect(JSON.stringify(report)).not.toContain("alpha-fetch");
+  });
+});
+
+describe("bare repository report", () => {
+  test.each([false, true])(
+    "reports an exact %s bare repository without worktree facts",
+    async (committed) => {
+      const caseFolder = await temporaryDirectory("casegraph-bare-exact-");
+      const configHome = await temporaryDirectory("casegraph-config-");
+      const caseHome = path.join(caseFolder, "casegraph");
+      await git(caseFolder, [
+        "init",
+        "--bare",
+        "--initial-branch=main",
+        caseHome,
+      ]);
+      if (committed) {
+        const source = await createCaseHome({ commit: true });
+        await git(source.caseHome, ["remote", "add", "bare-target", caseHome]);
+        await git(source.caseHome, ["push", "bare-target", "main:main"]);
+      }
+      const remoteUrl = path.join(caseFolder, "origin.git");
+      await git(caseHome, ["remote", "add", "origin", remoteUrl]);
+      const production = createGitRunner();
+      const commands: readonly string[][] = [];
+      const mutableCommands = commands as string[][];
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder,
+          caseId: `PoliceConductUS/bare-${String(committed)}`,
+          configHome,
+          selectedRemote: "origin",
+        },
+        {
+          git: async (args, cwd) => {
+            mutableCommands.push([...args]);
+            return production(args, cwd);
+          },
+        },
+      );
+      expect(report.classification).toBe("conflict");
+      if (
+        report.repository.state !== "ineligible" ||
+        report.repository.reason !== "bare"
+      )
+        throw new Error("expected exact bare repository report");
+      if (committed)
+        expect(report.repository.commit).toMatch(/^[0-9a-f]{40}$/u);
+      else expect(report.repository.commit).toBeUndefined();
+      expect(report.repository).toEqual({
+        state: "ineligible",
+        reason: "bare",
+        bare: true,
+        gitDirectory: await realpath(caseHome),
+        commonDirectory: await realpath(caseHome),
+        ...(committed ? { commit: report.repository.commit } : {}),
+        unborn: !committed,
+        branch: "main",
+        detached: false,
+        upstream: undefined,
+        remotes: [
+          { name: "origin", fetchUrls: [remoteUrl], pushUrls: [remoteUrl] },
+        ],
+      });
+      if (committed) expect(report.repository).toHaveProperty("commit");
+      else expect(report.repository).not.toHaveProperty("commit");
+      for (const property of [
+        "topLevel",
+        "dirty",
+        "rootTrackedInHead",
+        "expectedTopLevel",
+        "gitFile",
+      ])
+        expect(report.repository).not.toHaveProperty(property);
+      const normalized = commands.map((args) => args.slice(1));
+      expect(
+        normalized.some(
+          (args) =>
+            args.join(" ") === "rev-parse --show-toplevel" ||
+            args[0] === "status" ||
+            args[0] === "ls-tree",
+        ),
+      ).toBe(false);
+      expect(report.structuralPushTarget).toEqual({
+        state: "known",
+        ready: true,
+        remote: "origin",
+        pushUrls: [remoteUrl],
+        provesWritability: false,
+      });
+      expect(report.recovery.remotes).toEqual({
+        state: "known",
+        remotes: [
+          { name: "origin", fetchUrls: [remoteUrl], pushUrls: [remoteUrl] },
+        ],
+      });
+      if (committed) expect(report.recovery).toHaveProperty("commit");
+      else expect(report.recovery).not.toHaveProperty("commit");
+      expect(report.recovery).not.toHaveProperty("repositoryDiagnostic");
+    },
+  );
+
+  test.each([
+    "remote",
+    "remote get-url --all origin",
+    "remote get-url --push --all origin",
+  ])("makes a bare %s failure atomically unavailable", async (failed) => {
+    const caseFolder = await temporaryDirectory("casegraph-bare-failure-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    await git(caseFolder, [
+      "init",
+      "--bare",
+      "--initial-branch=main",
+      caseHome,
+    ]);
+    await git(caseHome, ["remote", "add", "origin", "origin.example"]);
+    const production = createGitRunner();
+    const commands: string[] = [];
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder,
+        caseId: "PoliceConductUS/bare-remote-failure",
+        configHome,
+      },
+      {
+        git: async (args, cwd) => {
+          const command = args.slice(1).join(" ");
+          commands.push(command);
+          if (command === failed)
+            return {
+              exitCode: 42,
+              stdout: "",
+              stderr: "bare remote failure\n",
+            };
+          return production(args, cwd);
+        },
+      },
+    );
+    expect(report.classification).toBe("unavailable");
+    expect(report.repository).toMatchObject({ state: "unavailable" });
+    expect(report.structuralPushTarget).toMatchObject({
+      state: "unavailable",
+    });
+    expect(report.structuralPushTarget).not.toHaveProperty("pushUrls");
+    expect(report.recovery.remotes).toMatchObject({ state: "unavailable" });
+    expect(report.recovery.remotes).not.toHaveProperty("remotes");
+    expect(commands.at(-1)).toBe(failed);
+    expect(
+      commands.some(
+        (command) =>
+          command === "rev-parse --show-toplevel" ||
+          command.startsWith("status ") ||
+          command.startsWith("ls-tree "),
+      ),
+    ).toBe(false);
   });
 });

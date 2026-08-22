@@ -129,12 +129,26 @@ describe("exact child path observation", () => {
     const canonicalCaseHome = path.join(canonicalCaseFolder, "casegraph");
     for (const calls of Object.values(observedFs)) calls.length = 0;
     strictOpenCalls.length = 0;
+    let registrationReads = 0;
 
-    const report = await inspectGitBackedCaseHome({
-      caseFolder,
-      caseId: "PoliceConductUS/symlink",
-      configHome,
-    });
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder,
+        caseId: "PoliceConductUS/symlink",
+        configHome,
+      },
+      {
+        registrationStore: {
+          read: async () => {
+            registrationReads += 1;
+            await import("node:fs/promises").then(({ realpath }) =>
+              realpath(path.join(canonicalTarget, "root.yaml")),
+            );
+            return new Map();
+          },
+        },
+      },
+    );
 
     expect(report.classification).toBe("conflict");
     expect(
@@ -145,6 +159,7 @@ describe("exact child path observation", () => {
     expect(callsAtOrBelow(observedFs.readFile, canonicalTarget)).toEqual([]);
     expect(callsAtOrBelow(observedFs.readdir, canonicalTarget)).toEqual([]);
     expect(strictOpenCalls).toEqual([]);
-    expect(report.registration.state).toBe("different");
+    expect(registrationReads).toBe(0);
+    expect(report.registration.state).toBe("not-inspected");
   });
 });
