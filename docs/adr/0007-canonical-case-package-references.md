@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted.
+Accepted in part.
+
+[ADR 0016](0016-scoped-package-identity-and-dependencies.md) supersedes this
+ADR's use of relative folder names as logical package references. The
+workspace-home, CaseHome-owned package path, ambiguity failure, traversal-cycle
+detection, and separation of search from write authority remain accepted.
 
 ## Context
 
@@ -30,9 +35,11 @@ CaseGraph-owned, case-specific files. A command that needs to create such a
 file must fail before writing when the workspace-home entry point is missing or
 invalid or its containing directory is not writable.
 
-The exact workspace configuration field name remains undecided.
+The exact workspace configuration field name remained undecided by this ADR.
+ADR 0016 assigns dependency and package-path configuration to the CaseHome
+configuration model.
 
-### Resolve packages through an ordered package path
+### Resolve packages through an ordered package path (superseded in part)
 
 A workspace may declare an ordered package path. Each package-path entry is a
 directory used as a search root. It does not describe what type of material the
@@ -42,6 +49,10 @@ or `authorities`.
 A relative package reference is resolved by testing the referenced relative
 folder beneath each package-path entry for a valid canonical package entry
 point, normally `root.yaml`.
+
+ADR 0016 replaces that relative-folder reference with a scoped package name and
+semantic-version selector. The package path remains the CaseHome-owned search
+boundary, but physical folder layout is no longer logical package identity.
 
 For example, a reference to:
 
