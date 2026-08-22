@@ -8,6 +8,7 @@ import { writeResourceDocument } from "../resource-document.js";
 import {
   createResourceRegistry,
   defineResourceKind,
+  type ResourceRegistry,
 } from "../resource-kind.js";
 import { ResourceUidSchema } from "../resource-uid.js";
 import { openCaseHomeResources } from "./casehome-resources.js";
@@ -106,6 +107,41 @@ async function writeNonRoot(
   const rootPath = join(caseHomePath, uid, "root.yaml");
   await mkdir(dirname(rootPath), { recursive: true });
   await writeResourceDocument(rootPath, value, registry);
+}
+
+function observeRegistryReads(baseRegistry: ResourceRegistry): {
+  readonly registry: ResourceRegistry;
+  readCount(resourcePath: string): number;
+  inspectionCount(resourcePath: string): number;
+} {
+  const reads = new Map<string, number>();
+  const inspections = new Map<string, number>();
+
+  function increment(counts: Map<string, number>, resourcePath: string): void {
+    counts.set(resourcePath, (counts.get(resourcePath) ?? 0) + 1);
+  }
+
+  return {
+    registry: {
+      read(value, resourcePath) {
+        increment(reads, resourcePath);
+        return baseRegistry.read(value, resourcePath);
+      },
+      inspect(value, resourcePath) {
+        increment(inspections, resourcePath);
+        return baseRegistry.inspect(value, resourcePath);
+      },
+      serialize(value, resourcePath) {
+        return baseRegistry.serialize(value, resourcePath);
+      },
+    },
+    readCount(resourcePath) {
+      return reads.get(resourcePath) ?? 0;
+    },
+    inspectionCount(resourcePath) {
+      return inspections.get(resourcePath) ?? 0;
+    },
+  };
 }
 
 describe("rooted CaseHome resources", () => {
@@ -254,6 +290,40 @@ spec: {}
     expect(snapshot.count).toBe(3);
     expect(snapshot.resolve(nodeAUid).resource.metadata.uid).toBe(nodeAUid);
     expect(snapshot.resolve(nodeBUid).resource.metadata.uid).toBe(nodeBUid);
+  });
+
+  test("reads and inspects each reachable UID once without touching an unreferenced directory", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const rootPath = join(caseHomePath, "root.yaml");
+    const nodeAPath = join(caseHomePath, nodeAUid, "root.yaml");
+    const nodeBPath = join(caseHomePath, nodeBUid, "root.yaml");
+    const unreferencedPath = join(caseHomePath, unreferencedUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([nodeAUid, nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      nodeAUid,
+      testNode(nodeAUid, [nodeBUid, caseUid]),
+    );
+    await writeNonRoot(caseHomePath, nodeBUid, testNode(nodeBUid, [nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      unreferencedUid,
+      testNode(unreferencedUid),
+    );
+    const observed = observeRegistryReads(registry);
+
+    const snapshot = await openCaseHomeResources(
+      caseHomePath,
+      observed.registry,
+    );
+
+    expect(snapshot.count).toBe(3);
+    for (const reachablePath of [rootPath, nodeAPath, nodeBPath]) {
+      expect(observed.readCount(reachablePath)).toBe(1);
+      expect(observed.inspectionCount(reachablePath)).toBe(1);
+    }
+    expect(observed.readCount(unreferencedPath)).toBe(0);
+    expect(observed.inspectionCount(unreferencedPath)).toBe(0);
   });
 
   test("excludes and refuses a valid unreferenced UID directory", async () => {
