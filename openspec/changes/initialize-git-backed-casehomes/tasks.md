@@ -22,9 +22,10 @@
 - [ ] 3.1 Add focused failing tests for missing and nonempty CaseFolders, empty
       CaseHome children, explicitly approved and declined existing non-Git
       CaseHomes with complete rooted graphs, rejection of nonempty new
-      membership, inherited outer-repo preservation, Git availability before
-      paths, init/write/reopen failures, malformed portable-config and lock
-      preservation, and no commit/remote/registration.
+      membership, inherited outer-owned-state preservation plus expected new
+      untracked-child status, Git availability before paths, init/write/reopen
+      failures, malformed portable-config and lock preservation, and no
+      commit/remote/registration.
 - [ ] 3.2 Implement exact-child Git initialization and strict root writing or
       adoption, then make the focused preparation tests pass.
 
@@ -34,7 +35,8 @@
       immediate push, staging/commit/commit-ID/push failures, separate post-push
       resource and Git failures, registration failure, exact state inventory,
       committed dirty remote-less registration, unborn and untracked root
-      rejection, and recovery-state preservation.
+      rejection, array-aware remote-mutation prohibition, and recovery-state
+      preservation.
 - [ ] 4.2 Implement finalization and existing-repository registration, then make
       the focused tests pass using a real local bare remote for push behavior.
 

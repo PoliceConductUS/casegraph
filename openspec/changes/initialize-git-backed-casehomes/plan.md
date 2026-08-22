@@ -143,8 +143,8 @@ YAML, Zod, Vitest, OpenSpec.
 
   Use `git init`, `git add`, `git commit`, `git remote add`, and temporary local
   paths through `execFile`, with a test-local author identity. Snapshot file
-  bytes plus `git status --porcelain=v1`, `git show-ref`, remote configuration,
-  and the registration bytes before inspection.
+  bytes plus parsed `git status --porcelain=v1`, `git show-ref`, remote
+  configuration, and the registration bytes before inspection.
 
 - [ ] **Step 2: Write failing report and immutability tests**
 
@@ -195,12 +195,11 @@ YAML, Zod, Vitest, OpenSpec.
   ```bash
   npm test -- test/cli.test.ts
   git diff --exit-code 294ee71 -- src/cli.ts test/cli.test.ts
-  rg 'github|octokit|gh |remote add|remote set-url' \
-    src/casehomes/git-backed-casehome
   ```
 
   Expected: existing CLI tests pass, both CLI files are unchanged from the Issue
-  #41 parent, and no provider or remote-configuration dependency exists.
+  #41 parent, and the inspection boundary is importable without changing CLI
+  behavior.
 
 - [ ] **Step 7: Run inspection tests and record GREEN**
 
@@ -234,7 +233,7 @@ YAML, Zod, Vitest, OpenSpec.
   `openCaseHomeResources`, and `CaseResourceRegistry`.
 - Produces: `prepareGitBackedCaseHome(input, dependencies): Promise<PreparedCaseHomeReport>` accepting common `caseFolder`, `configHome`, and validated `caseId`
   values plus either `{ mode: "create"; initialCase: CaseResource }` or
-  `{ mode: "adopt"; approveExistingNonGitCaseHome: true }`.
+  `{ mode: "adopt"; approveExistingNonGitCaseHome: boolean }`.
 
 - [ ] **Step 1: Write failing missing/empty preparation tests**
 
@@ -243,8 +242,10 @@ YAML, Zod, Vitest, OpenSpec.
   through the strict writer, reopens the rooted snapshot, and returns unborn
   uncommitted state with no remote or registration. Place unrelated files in
   an ordinary outer folder and a separately committed outer Git repository;
-  prove outer files, index, refs, branches, remotes, and upstreams remain
-  unchanged while the exact child becomes a distinct repository.
+  prove every pre-existing outer-owned file byte, index entry, ref, branch,
+  remote, and upstream remains unchanged while the exact child becomes a
+  distinct repository. Parse outer status separately and assert the expected
+  new untracked `casegraph/` entry without changing pre-existing status entries.
 
   First write a caller-supplied strict Case with nonempty `spec.resources` and
   prove create mode rejects it before creating any CaseFolder, child, root, Git
@@ -254,9 +255,11 @@ YAML, Zod, Vitest, OpenSpec.
 
   Cover explicitly approved strict non-Git CaseHome adoption with multiple
   rooted resources and owned files, proving the complete rooted graph is
-  preserved without a caller replacement root. Cover declined adoption,
-  invalid rooted membership, file/symlink child, existing mismatched repository,
-  and every `.git`-file checkout. For every failure, assert exact existing files,
+  preserved without a caller replacement root. Pass
+  `approveExistingNonGitCaseHome: false` to prove declined adoption is a
+  representable call that returns failure without mutation. Cover invalid rooted
+  membership, file/symlink child, existing mismatched repository, and every
+  `.git`-file checkout. For every failure, assert exact existing files,
   repository state, registration bytes, and recovery inventory.
 
   Add malformed existing `config.yaml` and arbitrary `casegraph.lock.yaml`
@@ -399,18 +402,35 @@ YAML, Zod, Vitest, OpenSpec.
 
   Expected: every focused unit and local-bare-remote integration test passes.
 
-- [ ] **Step 9: Prove the legacy import boundary**
+- [ ] **Step 9: Prove import, provider, remote-mutation, and legacy boundaries**
 
   Import `inspectGitBackedCaseHome`, `prepareGitBackedCaseHome`,
   `finalizeGitBackedCaseHome`, and `registerExistingGitBackedCaseHome` from
-  `src/casehomes/git-backed-casehome/index.ts` in the focused tests. Then run:
+  `src/casehomes/git-backed-casehome/index.ts` in the focused tests. Exercise
+  every boundary with a `GitRunner` observer that records each argument array
+  and assert:
+
+  ```typescript
+  expect(
+    recordedGitArgs.some(
+      (args) =>
+        args[0] === "remote" && (args[1] === "add" || args[1] === "set-url"),
+    ),
+  ).toBe(false);
+  ```
+
+  This assertion checks the actual argument structure and therefore catches
+  `['remote', 'add', ...]` and `['remote', 'set-url', ...]`. Also run:
 
   ```bash
+  rg 'octokit|@actions/github' \
+    src/casehomes/git-backed-casehome
   rg 'cases/workspaces|case-home-document|case-locator-document|readCaseHome|readCaseLocator|writeCaseHome|writeCaseLocator' \
     src/casehomes/git-backed-casehome
   ```
 
-  Expected: no legacy imports or calls from the new Issue #42 package.
+  Expected: both searches exit 1 with no output: no provider import and no
+  legacy imports or calls from the new Issue #42 package.
 
 - [ ] **Step 10: Mark tasks 4.1 and 4.2 complete, commit, and push**
 

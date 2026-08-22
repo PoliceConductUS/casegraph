@@ -14,7 +14,8 @@ registration rules.
   CaseFolder and its `casegraph/` child.
 - Add preparation for a missing or empty child and explicitly approved adoption
   of an existing strict non-Git CaseHome, with empty membership required only
-  for newly written roots.
+  for newly written roots and an explicit boolean representing both approval and
+  decline.
 - Add first-commit finalization that requires a configured push target, pushes
   immediately, revalidates, and registers last.
 - Add existing-repository registration that permits dirty or remote-less

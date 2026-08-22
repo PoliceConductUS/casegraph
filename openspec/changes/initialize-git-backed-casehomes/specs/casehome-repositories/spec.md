@@ -21,8 +21,10 @@ surrounding CaseFolder outside that repository.
 - **AND** its exact `casegraph/` child is available
 - **THEN** inspection reports the inherited repository root as non-primary
 - **THEN** preparation initializes the exact child as a distinct repository
-- **THEN** the outer repository's files, index, refs, branches, remotes, and
-  upstreams remain unchanged
+- **THEN** every pre-existing outer-owned file byte, index entry, ref, branch,
+  remote, and upstream remains unchanged
+- **THEN** the outer repository status reports the expected newly untracked
+  `casegraph/` child without changing any pre-existing status entry
 - **THEN** post-preparation inspection reports the child as the CaseHome Git root
 
 #### Scenario: Symlinked CaseHome child is rejected

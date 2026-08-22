@@ -58,8 +58,9 @@ CaseFolder or an ancestor is reported as non-primary, but does not block
 initializing an otherwise missing, empty, or explicitly approved exact child as
 a distinct repository. A bare repository cannot be primary. Any `.git` file is
 also ineligible, whether it identifies a linked worktree, a separate-git-dir
-checkout, or a submodule. An independently versioned outer repository is
-otherwise unchanged.
+checkout, or a submodule. Preparation preserves every pre-existing outer-owned
+byte and Git index/ref/branch/remote/upstream value, while the new nested
+`casegraph/` child is expected to appear as a new untracked outer status entry.
 
 ### Inspect through strict resources and exact Git commands
 
@@ -88,9 +89,10 @@ readiness.
 Preparation accepts a caller-validated canonical case ID, selected CaseFolder,
 configuration home, and one exact mode. Create mode includes a caller-supplied
 strict Case resource whose `spec.resources` must be empty. Adoption mode includes
-explicit approval and preserves an already valid strict non-Git CaseHome with
-its complete rooted graph. Provider authentication, commit messages, and remote
-values are not preparation inputs.
+an explicit boolean: `true` approves and preserves an already valid strict
+non-Git CaseHome with its complete rooted graph; `false` declines without
+mutation. Provider authentication, commit messages, and remote values are not
+preparation inputs.
 
 Before creating any path, preparation probes Git availability directly. Create
 mode may create a missing CaseFolder and exact `casegraph/` child or use an
@@ -102,7 +104,8 @@ overwrites `root.yaml`. A file or symlink at `casegraph`, invalid rooted graph,
 existing mismatched repository, bare repository, or any gitfile checkout fails.
 An inherited outer repository is reported but does not block initializing the
 exact eligible child; tests snapshot its files, index, refs, branches, remotes,
-and upstreams before and after.
+and upstreams before and after, then separately assert the expected new
+untracked `casegraph/` status entry.
 
 The Git runner initializes only the CaseHome. Create mode writes the missing
 empty-membership root through `writeResourceDocument`; both modes reopen through

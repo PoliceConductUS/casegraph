@@ -82,11 +82,14 @@ workflow.
   primary CaseHome. An inherited outer repository is reported as non-primary
   but does not block initializing an eligible exact child as a distinct repo.
 - An outer CaseFolder may be missing, nonempty, or itself inside a Git
-  repository. Only its exact `casegraph/` child is mutated.
+  repository. Only its exact `casegraph/` child is mutated. Pre-existing
+  outer-owned state is preserved, while the new nested child is expected to
+  appear as an untracked outer status entry.
 - Missing or empty creation accepts only a strict Case root with empty
   `spec.resources`. Existing non-Git CaseHome adoption requires explicit caller
-  approval and preserves its complete valid rooted graph. No existing root is
-  overwritten.
+  approval represented by `true`; `false` is the explicit declined path.
+  Approved adoption preserves its complete valid rooted graph. No existing root
+  is overwritten.
 - Preparation creates no commit and no registration. Finalization requires one
   selected configured push target before creating the first commit.
 - A configured effective push URL proves only structural readiness. Only the
