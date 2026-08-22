@@ -1,7 +1,13 @@
-import { constants } from "node:fs";
-import { access, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { init as initCuid2 } from "@paralleldrive/cuid2";
+import {
+  CASEGRAPH_API_VERSION,
+  type CaseHome,
+} from "../../../workspaces/case-home-document.js";
+import {
+  prepareCaseHome,
+  registerCaseHome,
+} from "../../../workspaces/create.js";
 import { fetchCourtListenerDocket } from "./api.js";
 import { deriveCaseIdFromDocket } from "./case-id.js";
 import { writeImportedGraphRecords } from "./graph-records.js";
@@ -9,20 +15,16 @@ import { writeHistory } from "./history.js";
 import { loadMappings } from "./mapping.js";
 import type { CommandResult, CourtListenerImportRuntime } from "./types.js";
 
-export const casesImportCourtListenerHelp = `Usage: casegraph cases import courtlistener <docket-id> [--dry-run | --write]
+export const casesImportCourtListenerHelp = `Usage: casegraph cases import courtlistener <docket-id> [--dry-run | --write] [--home <directory>] [--yes]
 
-Bootstrap a new case workspace from CourtListener REST docket data.
+Bootstrap a new case home from CourtListener REST docket data.
 
 The command uses COURTLISTENER_API_TOKEN from the environment.
-Dry-run is the default. Use --write to create the workspace.
+Dry-run is the default and needs no home. Use --write with --home to create the case.
 CourtListener API tokens are never printed or persisted.
 `;
 
 const createDefaultMutationId = initCuid2({ length: 10 });
-
-function workspaceDisplayPath(caseId: string): string {
-  return path.posix.join("workspace", caseId);
-}
 
 function commandShapeError(unexpectedArgument?: string): CommandResult {
   return {
@@ -33,39 +35,73 @@ function commandShapeError(unexpectedArgument?: string): CommandResult {
   };
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath, constants.F_OK);
-    return true;
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
+type ImportOptions =
+  | {
+      dryRun: boolean;
+      write: false;
+      home?: string;
+      yes: boolean;
+    }
+  | {
+      dryRun: boolean;
+      write: true;
+      home: string;
+      yes: boolean;
+    };
+
+function parseImportOptions(
+  flags: readonly string[],
+): ImportOptions | CommandResult {
+  let dryRun = false;
+  let write = false;
+  let home: string | undefined;
+  let yes = false;
+
+  for (let index = 0; index < flags.length; index += 1) {
+    const flag = flags[index];
+    if (flag === "--dry-run") {
+      dryRun = true;
+    } else if (flag === "--write") {
+      write = true;
+    } else if (flag === "--yes") {
+      yes = true;
+    } else if (flag === "--home") {
+      const homeValue = flags[index + 1];
+      if (!homeValue || homeValue.startsWith("--")) {
+        return commandShapeError();
+      }
+      home = homeValue;
+      index += 1;
+    } else if (flag.startsWith("--")) {
+      return commandShapeError();
+    } else {
+      return commandShapeError(flag);
+    }
+  }
+
+  if (dryRun && write) {
+    return {
+      exitCode: 1,
+      stderr: "`--dry-run` and `--write` cannot be used together.\n",
+    };
+  }
+
+  if (write) {
+    if (!home) {
+      return {
+        exitCode: 1,
+        stderr: "--home <directory> is required for a write import.\n",
+      };
     }
 
-    throw error;
+    return { dryRun, write: true, home, yes };
   }
+
+  return { dryRun, write: false, home, yes };
 }
 
-async function caseInsensitiveWorkspaceExists(
-  workspaceRoot: string,
-  caseId: string,
-): Promise<boolean> {
-  try {
-    const entries = await readdir(workspaceRoot, { withFileTypes: true });
-    return entries.some(
-      (entry) =>
-        entry.isDirectory() &&
-        entry.name.toLowerCase() === caseId.toLowerCase(),
-    );
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function importCourtListenerDocket(
@@ -75,27 +111,13 @@ export async function importCourtListenerDocket(
   runtime: CourtListenerImportRuntime,
   argv: readonly string[],
 ): Promise<CommandResult> {
-  const unexpectedArgument = flags.find((flag) => !flag.startsWith("--"));
-
-  if (!docketId || unexpectedArgument) {
-    return commandShapeError(unexpectedArgument);
-  }
-
-  const dryRun = flags.includes("--dry-run");
-  const write = flags.includes("--write");
-  const unknownFlag = flags.find(
-    (flag) => flag !== "--dry-run" && flag !== "--write",
-  );
-
-  if (unknownFlag) {
+  if (!docketId) {
     return commandShapeError();
   }
 
-  if (dryRun && write) {
-    return {
-      exitCode: 1,
-      stderr: "`--dry-run` and `--write` cannot be used together.\n",
-    };
+  const options = parseImportOptions(flags);
+  if ("exitCode" in options) {
+    return options;
   }
 
   const token = runtime.env?.COURTLISTENER_API_TOKEN;
@@ -133,21 +155,6 @@ export async function importCourtListenerDocket(
     };
   }
 
-  const workspaceRoot = path.join(cwd, "workspace");
-  const workspacePath = path.join(workspaceRoot, caseId);
-  const displayPath = workspaceDisplayPath(caseId);
-
-  if (
-    write &&
-    ((await pathExists(workspacePath)) ||
-      (await caseInsensitiveWorkspaceExists(workspaceRoot, caseId)))
-  ) {
-    return {
-      exitCode: 1,
-      stderr: `Case workspace already exists: ${displayPath}\n`,
-    };
-  }
-
   const output = [
     `CourtListener docket: ${docketId}`,
     `Derived case ID: ${caseId}`,
@@ -161,12 +168,25 @@ export async function importCourtListenerDocket(
     output.push("Citation lookup incomplete for one or more RECAP documents.");
   }
 
-  if (!write) {
-    output.push("Dry run only. No case workspace created.");
+  if (!options.write) {
+    output.push("Dry run only. No case home created.");
     return { exitCode: 0, stdout: `${output.join("\n")}\n` };
   }
 
-  await mkdir(workspacePath, { recursive: true });
+  const prepared = await prepareCaseHome(
+    {
+      caseId,
+      cwd,
+      home: options.home,
+      yes: options.yes,
+      existingHome: "reject",
+    },
+    runtime,
+  );
+  if ("exitCode" in prepared) {
+    return prepared;
+  }
+
   const timestamp = (runtime.now?.() ?? new Date()).toISOString();
   const mutationId = `m_${runtime.createMutationId?.() ?? createDefaultMutationId()}`;
   const allRequests = [
@@ -178,27 +198,50 @@ export async function importCourtListenerDocket(
     ...responses.citationLookupRequests,
   ];
 
-  await writeHistory(
-    workspacePath,
-    mutationId,
-    ["casegraph", ...argv],
-    responses.citationLookupIncomplete ? "incomplete" : "success",
-    timestamp,
-    timestamp,
-    allRequests,
-  );
-  await writeImportedGraphRecords(
-    workspacePath,
-    timestamp,
-    mutationId,
-    responses,
-    runtime.createGraphRecordId ?? createDefaultMutationId,
-    await loadMappings(),
-  );
+  try {
+    await writeHistory(
+      prepared.homeDirectory,
+      mutationId,
+      ["casegraph", ...argv],
+      responses.citationLookupIncomplete ? "incomplete" : "success",
+      timestamp,
+      timestamp,
+      allRequests,
+    );
+    const graphRoot = await writeImportedGraphRecords(
+      prepared.homeDirectory,
+      timestamp,
+      mutationId,
+      responses,
+      runtime.createGraphRecordId ?? createDefaultMutationId,
+      await loadMappings(),
+    );
+    const caseHome: CaseHome = {
+      apiVersion: CASEGRAPH_API_VERSION,
+      kind: "CaseHome",
+      metadata: { name: caseId },
+      spec: {
+        graphRoot,
+        packagePath: [],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    };
+    await registerCaseHome(prepared, caseHome);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stderr:
+        `CourtListener import failed. Partial case home retained: ${prepared.homeDirectory}\n` +
+        `${errorMessage(error)}\n`,
+    };
+  }
 
-  output.push(`Created case workspace: ${displayPath}`);
+  output.push(`Case home: ${prepared.homeDirectory}`);
+  output.push(`CaseHome root: ${prepared.homeRoot}`);
+  output.push(`Case locator: ${prepared.locatorRoot}`);
   output.push(
-    `Created mutation history: ${path.posix.join(displayPath, ".history", mutationId)}`,
+    `Created mutation history: ${path.join(prepared.homeDirectory, ".history", mutationId)}`,
   );
 
   return { exitCode: 0, stdout: `${output.join("\n")}\n` };

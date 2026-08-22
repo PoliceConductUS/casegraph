@@ -1,5 +1,8 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
+import { loadCaseWorkspace } from "./workspaces/load.js";
+import type { WorkspaceRuntime } from "./workspaces/create.js";
 
 export type CommandResult = {
   exitCode: number;
@@ -7,37 +10,16 @@ export type CommandResult = {
   stderr?: string;
 };
 
-export function workspaceDisplayPath(caseId: string): string {
-  return path.posix.join("workspace", caseId);
-}
-
-export function isRootCaseNode(content: string): boolean {
-  return (
-    /^type: "?node"?$/m.test(content) &&
-    /^kind: "?case"?$/m.test(content) &&
-    /^id: "?root"?$/m.test(content)
-  );
-}
-
-export async function pathIsDirectory(filePath: string): Promise<boolean> {
-  try {
-    return (await stat(filePath)).isDirectory();
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
-}
-
-export async function validCaseIds(cwd: string): Promise<string[]> {
-  const workspaceRoot = path.join(cwd, "workspace");
+export async function validCaseIds(
+  cwd: string,
+  runtime: WorkspaceRuntime = {},
+): Promise<string[]> {
+  const casegraphHome =
+    runtime.casegraphHome ?? path.join(homedir(), ".casegraph");
   let entries;
 
   try {
-    entries = await readdir(workspaceRoot, { withFileTypes: true });
+    entries = await readdir(casegraphHome, { withFileTypes: true });
   } catch (error) {
     const nodeError = error as NodeJS.ErrnoException;
     if (nodeError.code === "ENOENT") {
@@ -48,44 +30,37 @@ export async function validCaseIds(cwd: string): Promise<string[]> {
   }
 
   const caseIds: string[] = [];
+  const locatorDirectories = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    try {
-      const rootNode = await readFile(
-        path.join(workspaceRoot, entry.name, "root.yaml"),
-        "utf8",
-      );
-
-      if (isRootCaseNode(rootNode)) {
-        caseIds.push(entry.name);
-      }
-    } catch (error) {
-      const nodeError = error as NodeJS.ErrnoException;
-      if (nodeError.code === "ENOENT") {
-        continue;
-      }
-
-      throw error;
+  for (const caseId of locatorDirectories) {
+    const loaded = await loadCaseWorkspace(
+      caseId,
+      cwd,
+      { casegraphHome },
+      { requireWritableHome: false },
+    );
+    if (!("exitCode" in loaded)) {
+      caseIds.push(caseId);
     }
   }
 
-  return caseIds.sort((a, b) => a.localeCompare(b));
+  return caseIds;
 }
 
 export async function resolveOnlyCaseId(
   cwd: string,
+  runtime?: WorkspaceRuntime,
 ): Promise<string | CommandResult> {
-  const caseIds = await validCaseIds(cwd);
+  const caseIds = await validCaseIds(cwd, runtime);
 
   if (caseIds.length === 0) {
     return {
       exitCode: 1,
       stderr:
-        "No case exists.\n\nCreate one with:\n  casegraph cases new <case-id>\n",
+        "No case exists.\n\nCreate one with:\n  casegraph cases new <case-id> --home <directory>\n",
     };
   }
 
@@ -100,7 +75,7 @@ export async function resolveOnlyCaseId(
     caseIds[0] ?? {
       exitCode: 1,
       stderr:
-        "No case exists.\n\nCreate one with:\n  casegraph cases new <case-id>\n",
+        "No case exists.\n\nCreate one with:\n  casegraph cases new <case-id> --home <directory>\n",
     }
   );
 }

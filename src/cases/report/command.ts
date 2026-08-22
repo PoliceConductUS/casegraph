@@ -1,15 +1,13 @@
-import path from "node:path";
 import {
   graphTraversalSummary,
   readGraphNodes,
   type DocketEntryNode,
   type DocumentNode,
 } from "../graph/records.js";
-import {
-  pathIsDirectory,
-  resolveOnlyCaseId,
-  workspaceDisplayPath,
-} from "../workspaces.js";
+import { resolveOnlyCaseId } from "../workspaces.js";
+import type { CaseGraphRoot } from "../workspaces/case-home-document.js";
+import type { WorkspaceRuntime } from "../workspaces/create.js";
+import { loadCaseWorkspace } from "../workspaces/load.js";
 
 export type CommandResult = {
   exitCode: number;
@@ -54,7 +52,7 @@ export const casesReportHelp = `Usage: casegraph cases report <case-id>
 
 Print a read-only legal docket for an existing case workspace.
 
-The report reads repo-local graph records only.
+The report reads case-home graph records only.
 The case ID may be omitted only when exactly one valid case exists.
 `;
 
@@ -109,8 +107,11 @@ function documentRecord(node: DocumentNode): DocumentRecord {
   };
 }
 
-async function readCaseReport(workspacePath: string): Promise<CaseReport> {
-  const graphNodes = await readGraphNodes(workspacePath);
+async function readCaseReport(
+  homeDirectory: string,
+  rootNode: CaseGraphRoot,
+): Promise<CaseReport> {
+  const graphNodes = await readGraphNodes(homeDirectory, rootNode);
   const docketEntries: DocketEntryRecord[] = [];
   const documents: DocumentRecord[] = [];
   const missingCategoryCounts = initialMissingCategoryCounts();
@@ -250,6 +251,7 @@ function formatReport(caseId: string, report: CaseReport): string {
 export async function runReportCommand(
   reportArgs: readonly string[],
   cwd: string,
+  runtime: WorkspaceRuntime,
 ): Promise<CommandResult> {
   if (reportArgs.length > 1) {
     return {
@@ -260,24 +262,24 @@ export async function runReportCommand(
 
   const resolvedCaseId =
     reportArgs.length === 0
-      ? await resolveOnlyCaseId(cwd)
+      ? await resolveOnlyCaseId(cwd, runtime)
       : (reportArgs[0] ?? "");
 
   if (typeof resolvedCaseId !== "string") {
     return resolvedCaseId;
   }
 
-  const displayWorkspacePath = workspaceDisplayPath(resolvedCaseId);
-  const workspacePath = path.join(cwd, "workspace", resolvedCaseId);
-
-  if (!(await pathIsDirectory(workspacePath))) {
-    return {
-      exitCode: 1,
-      stderr: `Case workspace does not exist: ${displayWorkspacePath}\n`,
-    };
+  const resolved = await loadCaseWorkspace(resolvedCaseId, cwd, runtime, {
+    requireWritableHome: false,
+  });
+  if ("exitCode" in resolved) {
+    return resolved;
   }
 
-  const report = await readCaseReport(workspacePath);
+  const report = await readCaseReport(
+    resolved.homeDirectory,
+    resolved.graphRoot,
+  );
 
   return {
     exitCode: 0,

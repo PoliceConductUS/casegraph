@@ -16,36 +16,56 @@ The goal is not to draft filings directly. The goal is to create an auditable cu
 
 ## Current Status
 
-The first command is implemented:
+Create or attach an external case home by specifying its directory:
 
 ```bash
-./casegraph cases new <case-id>
+./casegraph cases new <case-id> --home <directory> [--yes]
 ```
 
 Example:
 
 ```bash
-./casegraph cases new example-v-example-city
+./casegraph cases new example-v-example-city \
+  --home ../cases/example-v-example-city
 ```
 
-The command creates:
+The command creates a typed `CaseHome` at the selected directory and a
+machine-local `CaseLocator` under `~/.casegraph/`:
 
 ```text
-workspace/<case-id>/
+../cases/example-v-example-city/
+  root.yaml
+
+~/.casegraph/example-v-example-city/
   root.yaml
 ```
 
-`root.yaml` is the first graph node for the case. Its node ID is `root`, scoped by the case workspace folder.
+The `CaseHome` contains the case graph root. Its node ID is `root`, scoped by
+the selected case home.
 
-## First Workspace Decision
+Add one or more ordered external package search roots to an existing case:
 
-Case workspaces will be created under:
-
-```text
-./workspace/<case-id>
+```bash
+./casegraph packages add example-v-example-city \
+  ../authorities ../shared-records
 ```
 
-The repository is private and may include the `workspace/` directory. Case materials should still be treated as sensitive.
+The paths are stored in the selected case home's `root.yaml`. External package
+roots remain read-only to CaseGraph even when the filesystem permits writes.
+Managed-write authorization for shared packages is not yet supported.
+
+## Case Home Location
+
+Case homes may be located outside this repository. CaseGraph records the
+selected home in a machine-local locator:
+
+```text
+~/.casegraph/<case-id>/root.yaml
+```
+
+The repository remains private and may include case workspaces when that is
+useful. Case materials should still be treated as sensitive wherever they are
+stored.
 
 ## Developer Setup
 
@@ -118,7 +138,8 @@ Run the local CLI without building:
 
 ```bash
 ./casegraph --help
-./casegraph cases new example-v-example-city
+./casegraph cases new example-v-example-city \
+  --home ../cases/example-v-example-city
 ```
 
 The root `./casegraph` wrapper is the preferred local development command. It runs the TypeScript entrypoint directly and preserves normal CLI behavior.

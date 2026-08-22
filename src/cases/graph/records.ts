@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { CaseGraphRoot } from "../workspaces/case-home-document.js";
 
 const SourceSchema = z.looseObject({
   download_url: z.string().optional(),
@@ -298,18 +299,34 @@ function parseGraphNodeYaml(content: string): unknown {
 }
 
 export async function readGraphNodes(
-  workspacePath: string,
+  homeDirectory: string,
+  rootNode: CaseGraphRoot,
 ): Promise<ParsedGraphNode[]> {
-  const entries = await readdir(workspacePath, { withFileTypes: true });
-  const parsedNodes: ParsedGraphNode[] = [];
+  const entries = await readdir(homeDirectory, { withFileTypes: true });
+  const parsedNodes: ParsedGraphNode[] = [
+    {
+      fileStem: "root",
+      node: {
+        ...rootNode,
+        sources: rootNode.sources?.map((source) => ({
+          ...source,
+          source_id: String(source.source_id),
+        })),
+      },
+    },
+  ];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) {
+    if (
+      !entry.isFile() ||
+      !entry.name.endsWith(".yaml") ||
+      entry.name === "root.yaml"
+    ) {
       continue;
     }
 
     const content = await readFile(
-      path.join(workspacePath, entry.name),
+      path.join(homeDirectory, entry.name),
       "utf8",
     );
     const parseResult = GraphNodeSchema.safeParse(parseGraphNodeYaml(content));

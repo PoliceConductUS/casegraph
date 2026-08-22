@@ -3,12 +3,9 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { init as initCuid2 } from "@paralleldrive/cuid2";
-import {
-  isRootCaseNode,
-  pathIsDirectory,
-  resolveOnlyCaseId,
-  workspaceDisplayPath,
-} from "../../workspaces.js";
+import { resolveOnlyCaseId } from "../../workspaces.js";
+import type { WorkspaceRuntime } from "../../workspaces/create.js";
+import { loadCaseWorkspace } from "../../workspaces/load.js";
 import type { DocumentNode, GraphNode } from "../../graph/records.js";
 import { readGraphNodes, type ParsedGraphNode } from "../../graph/records.js";
 import {
@@ -46,7 +43,7 @@ export type CommandResult = {
   stderr?: string;
 };
 
-export type AnalysisNewRuntime = {
+export type AnalysisNewRuntime = WorkspaceRuntime & {
   emitProgress?: (message: string) => void;
   env?: NodeJS.ProcessEnv;
   incidentFromComplaintAiExtractor?: IncidentFromComplaintAiExtractor;
@@ -200,25 +197,6 @@ function unexpectedAnalysisResumeArgument(argument: string): CommandResult {
     exitCode: 1,
     stderr: `Unexpected analysis resume argument: ${argument}\n\n${casesAnalysisResumeHelp}`,
   };
-}
-
-async function validCaseWorkspace(workspacePath: string): Promise<boolean> {
-  if (!(await pathIsDirectory(workspacePath))) {
-    return false;
-  }
-
-  try {
-    return isRootCaseNode(
-      await readFile(path.join(workspacePath, "root.yaml"), "utf8"),
-    );
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -386,7 +364,9 @@ async function mainGraphSnapshot({
     left.node.id.localeCompare(right.node.id),
   )) {
     records[node.id] = sha256(
-      await readFile(path.join(workspacePath, `${fileStem}.yaml`), "utf8"),
+      fileStem === "root"
+        ? JSON.stringify(node)
+        : await readFile(path.join(workspacePath, `${fileStem}.yaml`), "utf8"),
     );
   }
 
@@ -1748,20 +1728,21 @@ async function createAnalysis(
 ): Promise<CommandResult> {
   const progress = createAnalysisProgress(runtime);
   progress.write(`analysis new: resolving case ${caseId}`);
-  const displayWorkspacePath = workspaceDisplayPath(caseId);
-  const workspacePath = path.join(cwd, "workspace", caseId);
-
-  progress.write(`analysis new: checking workspace ${displayWorkspacePath}`);
-  if (!(await validCaseWorkspace(workspacePath))) {
+  const resolved = await loadCaseWorkspace(caseId, cwd, runtime, {
+    requireWritableHome: true,
+  });
+  if ("exitCode" in resolved) {
     return {
-      exitCode: 1,
+      ...resolved,
       stderr: errorOutput(
         progress,
         runtime,
-        `Case workspace does not exist: ${displayWorkspacePath}\n`,
+        resolved.stderr ?? "Unable to load case workspace.\n",
       ),
     };
   }
+  const workspacePath = resolved.homeDirectory;
+  progress.write(`analysis new: checking workspace ${workspacePath}`);
 
   const currentDirectory = path.join(workspacePath, "analysis", "current");
   const currentRootPath = path.join(currentDirectory, "root.yaml");
@@ -1779,7 +1760,7 @@ async function createAnalysis(
   }
 
   progress.write("analysis new: loading main case graph");
-  const parsedNodes = await readGraphNodes(workspacePath);
+  const parsedNodes = await readGraphNodes(workspacePath, resolved.graphRoot);
   const nodes = parsedNodes.map(({ node }) => node);
 
   progress.write("analysis new: checking main graph for existing incident");
@@ -1837,7 +1818,7 @@ export async function runAnalysisNewCommand(
   runtime: AnalysisNewRuntime = {},
 ): Promise<CommandResult> {
   if (analysisArgs.length === 0) {
-    const resolvedCaseId = await resolveOnlyCaseId(cwd);
+    const resolvedCaseId = await resolveOnlyCaseId(cwd, runtime);
 
     if (typeof resolvedCaseId !== "string") {
       return resolvedCaseId;
@@ -1861,20 +1842,21 @@ async function resumeAnalysis(
 ): Promise<CommandResult> {
   const progress = createAnalysisProgress(runtime);
   progress.write(`analysis resume: resolving case ${caseId}`);
-  const displayWorkspacePath = workspaceDisplayPath(caseId);
-  const workspacePath = path.join(cwd, "workspace", caseId);
-
-  progress.write(`analysis resume: checking workspace ${displayWorkspacePath}`);
-  if (!(await validCaseWorkspace(workspacePath))) {
+  const resolved = await loadCaseWorkspace(caseId, cwd, runtime, {
+    requireWritableHome: true,
+  });
+  if ("exitCode" in resolved) {
     return {
-      exitCode: 1,
+      ...resolved,
       stderr: errorOutput(
         progress,
         runtime,
-        `Case workspace does not exist: ${displayWorkspacePath}\n`,
+        resolved.stderr ?? "Unable to load case workspace.\n",
       ),
     };
   }
+  const workspacePath = resolved.homeDirectory;
+  progress.write(`analysis resume: checking workspace ${workspacePath}`);
 
   const currentDirectory = path.join(workspacePath, "analysis", "current");
   const currentRootPath = path.join(currentDirectory, "root.yaml");
@@ -1917,7 +1899,7 @@ async function resumeAnalysis(
   }
 
   progress.write("analysis resume: loading main case graph");
-  const parsedNodes = await readGraphNodes(workspacePath);
+  const parsedNodes = await readGraphNodes(workspacePath, resolved.graphRoot);
   const nodes = parsedNodes.map(({ node }) => node);
   const timestamp = new Date().toISOString();
   const graphSnapshot = await mainGraphSnapshot({
@@ -1992,7 +1974,7 @@ export async function runAnalysisResumeCommand(
   runtime: AnalysisNewRuntime = {},
 ): Promise<CommandResult> {
   if (analysisArgs.length === 0) {
-    const resolvedCaseId = await resolveOnlyCaseId(cwd);
+    const resolvedCaseId = await resolveOnlyCaseId(cwd, runtime);
 
     if (typeof resolvedCaseId !== "string") {
       return resolvedCaseId;

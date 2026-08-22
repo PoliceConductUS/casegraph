@@ -1,10 +1,12 @@
+import type { WorkspaceRuntime } from "../../../workspaces/create.js";
+
 export type CommandResult = {
   exitCode: number;
   stdout?: string;
   stderr?: string;
 };
 
-export type CourtListenerImportRuntime = {
+export type CourtListenerImportRuntime = WorkspaceRuntime & {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   now?: () => Date;

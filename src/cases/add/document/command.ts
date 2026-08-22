@@ -1,11 +1,9 @@
 import { constants } from "node:fs";
 import { access, open, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  pathIsDirectory,
-  resolveOnlyCaseId,
-  workspaceDisplayPath,
-} from "../../workspaces.js";
+import { resolveOnlyCaseId } from "../../workspaces.js";
+import type { WorkspaceRuntime } from "../../workspaces/create.js";
+import { loadCaseWorkspace } from "../../workspaces/load.js";
 
 export type CommandResult = {
   exitCode: number;
@@ -111,6 +109,7 @@ async function addComplaintDocument(
   documentType: string | undefined,
   pdfPath: string | undefined,
   cwd: string,
+  runtime: WorkspaceRuntime,
 ): Promise<CommandResult> {
   if (!caseId || !documentType || !pdfPath) {
     return { exitCode: 1, stderr: casesAddDocumentHelp };
@@ -123,25 +122,19 @@ async function addComplaintDocument(
     };
   }
 
-  const displayWorkspacePath = workspaceDisplayPath(caseId);
-  const workspacePath = path.join(cwd, "workspace", caseId);
-  const complaintPath = path.join(workspacePath, "complaint.yaml");
-  const complaintDisplayPath = path.posix.join(
-    displayWorkspacePath,
-    "complaint.yaml",
-  );
-
-  if (!(await pathIsDirectory(workspacePath))) {
-    return {
-      exitCode: 1,
-      stderr: `Case workspace does not exist: ${displayWorkspacePath}\n`,
-    };
+  const resolved = await loadCaseWorkspace(caseId, cwd, runtime, {
+    requireWritableHome: true,
+  });
+  if ("exitCode" in resolved) {
+    return resolved;
   }
+
+  const complaintPath = path.join(resolved.homeDirectory, "complaint.yaml");
 
   if (await pathExists(complaintPath)) {
     return {
       exitCode: 1,
-      stderr: `Complaint document already exists: ${complaintDisplayPath}\n`,
+      stderr: `Complaint document already exists: ${complaintPath}\n`,
     };
   }
 
@@ -157,7 +150,7 @@ async function addComplaintDocument(
 
   return {
     exitCode: 0,
-    stdout: `Created complaint document: ${complaintDisplayPath}\nNext: run casegraph cases augment to report directly referenced items not yet in the graph.\n`,
+    stdout: `Created complaint document: ${complaintPath}\nNext: run casegraph cases augment to report directly referenced items not yet in the graph.\n`,
   };
 }
 
@@ -165,6 +158,7 @@ export async function runAddDocumentCommand(
   resource: string | undefined,
   documentArgs: readonly string[],
   cwd: string,
+  runtime: WorkspaceRuntime,
 ): Promise<CommandResult> {
   if (resource !== "document") {
     return { exitCode: 1, stderr: casesAddDocumentHelp };
@@ -172,13 +166,19 @@ export async function runAddDocumentCommand(
 
   if (documentArgs.length === 2 && documentArgs[0] === "complaint") {
     const [, pdfPath] = documentArgs;
-    const resolvedCaseId = await resolveOnlyCaseId(cwd);
+    const resolvedCaseId = await resolveOnlyCaseId(cwd, runtime);
 
     if (typeof resolvedCaseId !== "string") {
       return resolvedCaseId;
     }
 
-    return addComplaintDocument(resolvedCaseId, "complaint", pdfPath, cwd);
+    return addComplaintDocument(
+      resolvedCaseId,
+      "complaint",
+      pdfPath,
+      cwd,
+      runtime,
+    );
   }
 
   if (
@@ -194,5 +194,5 @@ export async function runAddDocumentCommand(
   }
 
   const [caseId, documentType, pdfPath] = documentArgs;
-  return addComplaintDocument(caseId, documentType, pdfPath, cwd);
+  return addComplaintDocument(caseId, documentType, pdfPath, cwd, runtime);
 }

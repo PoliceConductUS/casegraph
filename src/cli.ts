@@ -23,11 +23,12 @@ import {
   importCourtListenerDocket,
 } from "./cases/import/courtlistener/docket/command.js";
 import type { CourtListenerImportRuntime } from "./cases/import/courtlistener/docket/types.js";
+import { casesNewHelp, runNewCaseCommand } from "./cases/new/command.js";
 import {
-  casesNewHelp,
-  createCaseWorkspace,
-  extraCaseIdArgumentsResult,
-} from "./cases/new/command.js";
+  packagesAddHelp,
+  runPackagesAddCommand,
+} from "./cases/packages/add/command.js";
+import type { WorkspaceRuntime } from "./cases/workspaces/create.js";
 import { casesReportHelp, runReportCommand } from "./cases/report/command.js";
 import { Command } from "commander";
 
@@ -37,26 +38,127 @@ type CommandResult = {
   stderr?: string;
 };
 
-type Runtime = CourtListenerImportRuntime & AnalysisNewRuntime;
+type Runtime = CourtListenerImportRuntime &
+  AnalysisNewRuntime &
+  WorkspaceRuntime;
+
+type WorkspacePromptCallbacks = Required<
+  Pick<
+    WorkspaceRuntime,
+    | "approveCreation"
+    | "requestPackagePathReplacement"
+    | "approvePackagePathReplacement"
+  >
+>;
+
+type WorkspacePromptInput = {
+  cwd: string;
+  isTTY: boolean;
+  ask: (question: string) => Promise<string>;
+  write: (message: string) => void;
+};
+
+function normalizePromptedPath(
+  answer: string,
+  cwd: string,
+): string | undefined {
+  const trimmed = answer.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const unquoted = trimmed.replace(/^(['"])(.*)\1$/, "$2");
+  return path.isAbsolute(unquoted) ? unquoted : path.resolve(cwd, unquoted);
+}
+
+function isAffirmative(answer: string): boolean {
+  return /^(y|yes)$/i.test(answer.trim());
+}
+
+export function createWorkspacePromptCallbacks({
+  cwd,
+  isTTY,
+  ask,
+  write,
+}: WorkspacePromptInput): WorkspacePromptCallbacks {
+  return {
+    async approveCreation(request) {
+      if (!isTTY) {
+        return false;
+      }
+
+      const target =
+        request.type === "createHomeDirectory"
+          ? "case home directory"
+          : "CaseHome root";
+      return isAffirmative(
+        await ask(`Create ${target}: ${request.path}? [y/N] `),
+      );
+    },
+    async requestPackagePathReplacement(request) {
+      if (!isTTY) {
+        return undefined;
+      }
+
+      write(
+        `Missing package path for case ${request.caseId}:\n` +
+          `Stored path: ${request.missingStoredPath}\n` +
+          `CaseHome root: ${request.homeRoot}\n`,
+      );
+      return normalizePromptedPath(
+        await ask("Enter replacement directory, or press Enter to cancel: "),
+        cwd,
+      );
+    },
+    async approvePackagePathReplacement(request) {
+      if (!isTTY) {
+        return false;
+      }
+
+      return isAffirmative(
+        await ask(
+          `Replace stored package path in ${request.homeRoot}?\n` +
+            `Old: ${request.oldStoredPath}\n` +
+            `New: ${request.newStoredPath}\n` +
+            "Apply this CaseHome change? [y/N] ",
+        ),
+      );
+    },
+  };
+}
 
 const rootHelp = `Usage: casegraph <command>
 
-CaseGraph creates separated repo-local case workspaces for personal case analysis.
+CaseGraph creates separated case homes for personal case analysis.
 
 Commands:
   cases    Work with case workspaces
+  packages Manage external package roots
 
 Run "casegraph cases --help" for case workspace commands.
+Run "casegraph packages --help" for external package commands.
+`;
+
+const packagesHelp = `Usage: casegraph packages <command>
+
+Manage external package roots for a case.
+
+Commands:
+  add <case-id> <path>...
+                   Add ordered external package roots
+
+Run "casegraph packages add --help" for details.
 `;
 
 const casesHelp = `Usage: casegraph cases <command>
 
-Work with separated case workspaces.
+Work with separated case homes.
 
 Commands:
-  new <case-id>    Create a repo-local case workspace
-  import courtlistener <docket-id> [--dry-run | --write]
-                   Bootstrap a case workspace from CourtListener REST
+  new <case-id> --home <directory>
+                   Create an external case home
+  import courtlistener <docket-id> [--dry-run | --write] [--home <directory>] [--yes]
+                   Bootstrap a case home from CourtListener REST
   add document <case-id> complaint <path-to-pdf>
                    Record a complaint document node
   add evidence <case-id> <path-to-file>
@@ -93,10 +195,17 @@ function isHelpRequest(args: readonly string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-function importFlags(options: { dryRun?: boolean; write?: boolean }): string[] {
+function importFlags(options: {
+  dryRun?: boolean;
+  write?: boolean;
+  home?: string;
+  yes?: boolean;
+}): string[] {
   return [
     ...(options.dryRun === true ? ["--dry-run"] : []),
     ...(options.write === true ? ["--write"] : []),
+    ...(options.home ? ["--home", options.home] : []),
+    ...(options.yes === true ? ["--yes"] : []),
   ];
 }
 
@@ -122,6 +231,64 @@ export async function runCasegraph(
   }
 
   const [command, subcommand] = args;
+
+  if (command === "packages") {
+    if (!subcommand || isHelpRequest(args.slice(1, 2))) {
+      return { exitCode: 0, stdout: packagesHelp };
+    }
+
+    if (subcommand === "add" && isHelpRequest(args.slice(2))) {
+      return { exitCode: 0, stdout: packagesAddHelp };
+    }
+
+    if (subcommand !== "add") {
+      return {
+        exitCode: 1,
+        stderr: `Unknown packages command: ${subcommand}\n\n${packagesHelp}`,
+      };
+    }
+
+    let packageCommandResult: CommandResult | undefined;
+    const packageProgram = new Command();
+    packageProgram
+      .name("casegraph")
+      .exitOverride()
+      .allowUnknownOption(false)
+      .helpOption(false)
+      .showHelpAfterError(false)
+      .showSuggestionAfterError(false);
+
+    packageProgram
+      .command("packages")
+      .helpOption(false)
+      .command("add")
+      .helpOption(false)
+      .argument("[caseId]")
+      .argument("[paths...]")
+      .action(async (caseId: string | undefined, paths: string[]) => {
+        packageCommandResult = await runPackagesAddCommand(
+          commandArguments(caseId, paths),
+          cwd,
+          runtime,
+        );
+      });
+
+    try {
+      await packageProgram.parseAsync([...args], { from: "user" });
+    } catch (error) {
+      const commandError = error as Error & { code?: string };
+      if (commandError.code?.startsWith("commander.")) {
+        return {
+          exitCode: 1,
+          stderr: `${commandError.message}\n\n${packagesAddHelp}`,
+        };
+      }
+
+      return { exitCode: 1, stderr: `${commandError.message}\n` };
+    }
+
+    return packageCommandResult ?? { exitCode: 1, stderr: packagesAddHelp };
+  }
 
   if (command !== "cases") {
     return {
@@ -237,13 +404,24 @@ export async function runCasegraph(
     .command("new")
     .helpOption(false)
     .argument("[caseId]")
-    .argument("[extra...]")
-    .action(async (caseId: string | undefined, extra: string[]) => {
-      commandResult =
-        extra.length > 0
-          ? extraCaseIdArgumentsResult([caseId ?? "", ...extra])
-          : await createCaseWorkspace(caseId ?? "", cwd);
-    });
+    .requiredOption("--home <directory>")
+    .option("--yes")
+    .action(
+      async (
+        caseId: string | undefined,
+        options: { home?: string; yes?: boolean },
+      ) => {
+        commandResult = await runNewCaseCommand(
+          {
+            caseId: caseId ?? "",
+            cwd,
+            home: options.home,
+            yes: options.yes === true,
+          },
+          runtime,
+        );
+      },
+    );
 
   const addCommand = casesCommand.command("add").helpOption(false);
 
@@ -265,6 +443,7 @@ export async function runCasegraph(
           "document",
           commandArguments(caseIdOrType, typeOrPath, documentPath, extra),
           cwd,
+          runtime,
         );
       },
     );
@@ -284,6 +463,7 @@ export async function runCasegraph(
         commandResult = await runAddEvidenceCommand(
           commandArguments(caseIdOrPath, evidencePath, extra),
           cwd,
+          runtime,
         );
       },
     );
@@ -296,12 +476,19 @@ export async function runCasegraph(
     .argument("[extra...]")
     .option("--dry-run")
     .option("--write")
+    .option("--home <directory>")
+    .option("--yes")
     .action(
       (
         source: string | undefined,
         docketId: string | undefined,
         extra: string[],
-        options: { dryRun?: boolean; write?: boolean },
+        options: {
+          dryRun?: boolean;
+          write?: boolean;
+          home?: string;
+          yes?: boolean;
+        },
       ) => {
         if (source !== "courtlistener") {
           commandResult = {
@@ -332,6 +519,7 @@ export async function runCasegraph(
       commandResult = await runReportCommand(
         caseId ? [caseId, ...extra] : extra,
         cwd,
+        runtime,
       );
     });
 
@@ -349,7 +537,9 @@ export async function runCasegraph(
     return {
       exitCode: 1,
       stderr:
-        commanderError.code === "commander.unknownOption"
+        commanderError.code === "commander.unknownOption" ||
+        commanderError.code === "commander.missingMandatoryOptionValue" ||
+        commanderError.code === "commander.excessArguments"
           ? `${commanderError.message}\n`
           : casesHelp,
     };
@@ -359,20 +549,29 @@ export async function runCasegraph(
 }
 
 async function main(): Promise<void> {
-  function normalizePromptedPath(answer: string): string | undefined {
-    const trimmed = answer.trim();
-    if (!trimmed) {
-      return undefined;
+  const cwd = process.cwd();
+  async function ask(question: string): Promise<string> {
+    const readline = createInterface({
+      input: process.stdin,
+      output: process.stderr,
+    });
+    try {
+      return await readline.question(question);
+    } finally {
+      readline.close();
     }
-
-    const unquoted = trimmed.replace(/^(['"])(.*)\1$/, "$2");
-    return path.isAbsolute(unquoted)
-      ? unquoted
-      : path.resolve(process.cwd(), unquoted);
   }
 
-  const result = await runCasegraph(process.argv.slice(2), process.cwd(), {
+  const result = await runCasegraph(process.argv.slice(2), cwd, {
     env: process.env,
+    ...createWorkspacePromptCallbacks({
+      cwd,
+      isTTY: process.stdin.isTTY,
+      ask,
+      write(message) {
+        process.stderr.write(message);
+      },
+    }),
     emitProgress(message) {
       process.stderr.write(message);
     },
@@ -399,7 +598,7 @@ async function main(): Promise<void> {
         const answer = await readline.question(
           "Native complaint PDF text was not usable. If you have the original complaint PDF, enter its path now, or press Enter to continue to OCR: ",
         );
-        return normalizePromptedPath(answer);
+        return normalizePromptedPath(answer, cwd);
       } finally {
         readline.close();
       }

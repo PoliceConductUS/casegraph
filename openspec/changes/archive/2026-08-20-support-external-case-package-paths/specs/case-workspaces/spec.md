@@ -1,10 +1,4 @@
-# case-workspaces Specification
-
-## Purpose
-
-TBD - created by archiving change add-cases-new-command. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Create Case Workspace
 
@@ -284,6 +278,8 @@ is supplied.
 - **WHEN** a locator already exists for the derived case ID
 - **THEN** the command exits with a non-zero status
 - **THEN** the locator and selected home are unchanged
+
+## ADDED Requirements
 
 ### Requirement: Load External Case Workspace
 
