@@ -3,10 +3,16 @@ import {
   assertUniqueResourceUids,
   parseResourceReference,
   ResourceUidSchema,
+  type ResourceUid,
 } from "./resource-uid.js";
 
 const firstUid = "tz4a98xxat96iws9zmbrgj3a";
 const secondUid = "n8m2y4v6k9p3q7r5s1t0w2x4";
+
+const plainString: string = firstUid;
+// @ts-expect-error ResourceUid must not accept an unvalidated plain string.
+const resourceUidFromPlainString: ResourceUid = plainString;
+void resourceUidFromPlainString;
 
 describe("CaseGraph resource UIDs", () => {
   test("accepts one CUID2 for resource identity and references", () => {
