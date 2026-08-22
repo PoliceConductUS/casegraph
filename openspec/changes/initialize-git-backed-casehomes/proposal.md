@@ -12,9 +12,11 @@ registration rules.
 
 - Add a read-only exact repository inspection report for the selected
   CaseFolder and its `casegraph/` child.
-- Report required Git command failures as unavailable rather than inventing
-  ordinary repository facts, and isolate default inspection from ambient Git
-  selectors and configuration.
+- Report required Git command failures through exact unavailable repository,
+  push-target, and recovery states rather than inventing ordinary or empty
+  facts; permit only two exact nonzero result tuples; and isolate default
+  inspection from ambient Git selectors and configuration regardless of key
+  casing.
 - Report exact early resource and repository discriminants; skip strict machine
   registration inspection when a symlink/non-directory child makes target
   dereference unsafe, while retaining independent registration inspection for

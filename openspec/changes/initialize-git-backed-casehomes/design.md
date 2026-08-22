@@ -97,8 +97,9 @@ no-read boundary observable without a production test seam.
 
 The Git boundary executes argument arrays without a shell and disables optional
 Git locks for every repository-inspection command so status/stat refresh cannot
-rewrite the index. Its default runner copies required non-Git environment such
-as `PATH`, removes every ambient `GIT_*` entry, and sets only
+rewrite the index. Its default runner copies required non-Git environment,
+including the platform's actual `PATH`/`Path`, removes every ambient key whose
+uppercased name starts with `GIT_`, and sets only
 `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`,
 `GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C`. The explicit
 `--no-optional-locks` command control remains. This prevents repository,
@@ -114,14 +115,18 @@ unexpected nonzero result returns repository state and classification
 `unavailable`, names the command diagnostic in both readiness policies, keeps
 only safely observed recovery facts, copies the same diagnostic to
 `recovery.repositoryDiagnostic`, and stops before later Git inspection.
-The only narrow nonzero states are the sanitized no-repository result when no
-exact `.git` entry exists and quiet empty-output HEAD absence for an unborn
-repository. Branch and upstream commands use successful empty output for
-detached/no-upstream state where practical. Bare state is established before
-top-level inspection. Status, absolute Git directory, common directory,
-bare-state, required non-bare top-level, committed-root `ls-tree`, remote list,
-and configured fetch/push URL failures never become dirty, absent, untracked,
-or empty values.
+The only permitted nonzero tuples are exact. `rev-parse --absolute-git-dir` may
+mean absent/non-Git only when the exact `.git` entry is absent, exit is `128`,
+trimmed stdout is empty, and trimmed C-locale stderr is exactly one nonempty
+line beginning `fatal: not a git repository`. `rev-parse --verify --quiet HEAD`
+may mean unborn only for exit `1` with empty trimmed stdout and stderr. Any tuple
+mismatch is unavailable. `branch --show-current` and a branch `for-each-ref`
+upstream query represent detached/no-upstream through exit-zero empty output.
+Bare state is established before and skips the inapplicable top-level query;
+every executed command must still succeed. Status, absolute Git directory,
+common directory, bare-state, required non-bare top-level, committed-root
+`ls-tree`, remote list, and configured fetch/push URL failures never become
+dirty, absent, untracked, or empty values.
 
 Successful inspection reports the Git top-level, Git directory, common
 directory, branch or detached state, unborn or committed state, dirty state,
@@ -131,6 +136,22 @@ readiness means a caller-selected remote exists and
 `git remote get-url --push` returns a nonempty URL. It does not claim network,
 authentication, authorization, or server writability; only `git push` can prove
 those at that moment.
+
+`structuralPushTarget` is a discriminated union. Known state contains
+`state: "known"`, readiness, optional selected remote, `pushUrls`, and
+`provesWritability: false`. Identity rejection returns state `"not-inspected"`;
+Git/tool/required-command failure returns state `"unavailable"`. Both failure
+variants contain `ready: false`, the optional
+selected remote, an exact diagnostic, and `provesWritability: false`, but no
+`pushUrls`. `recovery.remotes` similarly contains either known remotes or a
+not-inspected/unavailable diagnostic; failed or skipped inspection never uses
+an empty array. A positively proven non-Git/remote-absent result may use a known
+empty remote array.
+
+Remote enumeration publishes atomically into the report. Any remote-name,
+fetch-URL, or push-URL command failure discards all partial results and makes
+repository, structural push target, and recovery remote inventory unavailable
+with the same diagnostic.
 
 Every report includes `classification`, `paths`, `resource`, `repository`,
 `registration`, `structuralPushTarget`, `registrationEligibility`,
@@ -143,13 +164,16 @@ A symlink or non-directory exact child returns all three not-inspected variants
 because child identity prevents strict-resource and repository inspection and
 the strict registration reader dereferences every stored canonical root during
 validation. Zero target access takes priority: the registry reader is not
-invoked and recovery records registration as not inspected.
+invoked, the structural push target and recovery remote inventory are not
+inspected without empty arrays, and recovery records registration as not
+inspected.
 
 Git-unavailable inspection of a safely identifiable normal child still opens
 strict resources and reads registration. Only its repository is unavailable.
 Recovery contains the safely observed directories and authoritative
-`documentPaths`, Git state when inspected, commit identity when present,
-configured remotes, and the independently observed registration state. A
+`documentPaths`, Git state when inspected, commit identity when present, a
+discriminated remote inventory, and the independently observed registration
+state. A
 different registration for the requested ID or an inverse conflicting-root
 registration makes registration eligibility false. Inherited outer inspection
 preserves raw index bytes and every pre-existing outer-owned file byte. Symlink

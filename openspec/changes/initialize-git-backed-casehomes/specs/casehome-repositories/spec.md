@@ -73,13 +73,16 @@ surrounding CaseFolder outside that repository.
 - **THEN** `registration` is
   `{ state: "not-inspected", diagnostic }` and the registration reader is not
   invoked
-- **THEN** `structuralPushTarget.ready`,
-  `registrationEligibility.eligible`, and `mutationReadiness.ready` are false
-  with empty push URLs and exact identity-failure reasons
+- **THEN** `structuralPushTarget` has state `"not-inspected"`, `ready: false`,
+  the selected remote when supplied, the identity diagnostic,
+  `provesWritability: false`, and no `pushUrls`
+- **THEN** `registrationEligibility.eligible` and `mutationReadiness.ready` are
+  false with exact identity-failure reasons
 - **THEN** `diagnostics` contains the resource and repository identity
   diagnostics plus the registration-not-inspected diagnostic
 - **THEN** `recovery` contains only safely observed path entries, no resource
-  count, commit, or remotes, and registration state `"not-inspected"`
+  count or commit, `remotes` in the not-inspected variant with the identity
+  diagnostic, and registration state `"not-inspected"`
 
 ### Requirement: Inspect Repository State Without Mutation
 
@@ -102,6 +105,19 @@ unavailable or a required inspection command fails. `RegistrationReport` MUST
 include `{ state: "not-inspected"; diagnostic: string }` for a symlink or
 non-directory exact child whose zero-target-access rejection prevents safe
 strict registration inspection.
+
+`structuralPushTarget` MUST be exactly one of:
+
+- `{ state: "known"; ready: boolean; remote?: string; pushUrls: readonly string[]; provesWritability: false }`;
+- `{ state: "not-inspected"; ready: false; remote?: string; diagnostic: string; provesWritability: false }`; or
+- `{ state: "unavailable"; ready: false; remote?: string; diagnostic: string; provesWritability: false }`.
+
+The not-inspected and unavailable variants MUST NOT contain `pushUrls`.
+`recovery.remotes` MUST be exactly
+`{ state: "known"; remotes: readonly GitRemoteReport[] }` or
+`{ state: "not-inspected" | "unavailable"; diagnostic: string }`. A known empty
+remote array means inspection positively established that no configured remote
+exists; it MUST NOT represent a failed or skipped query.
 
 #### Scenario: Existing primary repository is fully reported
 
@@ -146,15 +162,23 @@ reason, set `recovery.repositoryDiagnostic` to the same command-failure
 diagnostic, preserve only recovery facts safely observed before failure, and
 MUST NOT execute later repository-inspection commands or infer their state.
 
-The only expected nonzero results are narrowly classified command states: when
-the exact child has no `.git` entry, the sanitized `LC_ALL=C` no-repository
-result from repository discovery MAY mean absent/non-Git; and
-`rev-parse --verify --quiet HEAD` with its expected empty-output miss MAY mean
-unborn. Detached branch and missing-upstream inspection MUST use commands that
-return success with empty output where practical. A bare repository MUST be
-identified before top-level inspection so its inapplicable top-level result is
-not treated as failure. No other nonzero result may be interpreted as ordinary
-absence.
+The only expected nonzero results are these exact tuples:
+
+- `rev-parse --absolute-git-dir` MAY mean absent/non-Git only when the exact
+  `.git` entry is absent, `exitCode` is `128`, trimmed stdout is empty, and
+  trimmed stderr is exactly one nonempty C-locale line beginning
+  `fatal: not a git repository`.
+- `rev-parse --verify --quiet HEAD` MAY mean unborn only when `exitCode` is `1`
+  and trimmed stdout and stderr are both empty.
+
+Any mismatch in command, exact-child metadata precondition, exit code, stdout,
+stderr line count, locale, or prefix MUST be unavailable. Detached branch
+inspection MUST use `branch --show-current`, and upstream inspection MUST use a
+`for-each-ref` query, so those commands return exit zero with empty output for
+detached and no-upstream state respectively. A bare repository MUST be
+identified before top-level inspection and MUST skip an inapplicable top-level
+query, but every Git command that is executed for a bare repository MUST
+succeed. No other nonzero result may be interpreted as ordinary absence.
 
 #### Scenario: Required command failures do not become ordinary state
 
@@ -170,19 +194,45 @@ absence.
   inspection failure
 - **THEN** `recovery.repositoryDiagnostic` equals the unavailable repository
   diagnostic
+- **THEN** `structuralPushTarget` is the unavailable variant with the same
+  diagnostic and contains no `pushUrls`
+- **THEN** `recovery.remotes` is the unavailable variant with the same
+  diagnostic and contains no remote array
 - **THEN** recovery contains no Git fact from the failed command or any later
   command
 
-#### Scenario: Expected empty Git states remain representable
+#### Scenario: No-repository tuple is exact
 
-- **WHEN** an exact child without a `.git` entry produces the recognized
-  sanitized C-locale no-repository discovery result
+- **WHEN** `rev-parse --absolute-git-dir` runs with `LC_ALL=C`, the exact child
+  has no `.git` entry, and the result is exit `128`, empty trimmed stdout, and
+  exactly one nonempty trimmed stderr line beginning
+  `fatal: not a git repository`
 - **THEN** inspection may report absent/non-Git rather than unavailable
-- **WHEN** quiet committed-HEAD verification produces its expected empty-output
-  miss
+- **WHEN** any element of that command, metadata, exit, stdout, or stderr tuple
+  differs
+- **THEN** inspection reports unavailable
+
+#### Scenario: Unborn tuple is exact
+
+- **WHEN** `rev-parse --verify --quiet HEAD` returns exit `1` with empty trimmed
+  stdout and stderr
 - **THEN** inspection reports unborn rather than unavailable
-- **WHEN** successful branch or upstream inspection returns empty output
-- **THEN** inspection reports detached HEAD or no upstream respectively
+- **WHEN** its command, exit, stdout, or stderr tuple differs
+- **THEN** inspection reports unavailable
+
+#### Scenario: Detached and no-upstream states use successful empty results
+
+- **WHEN** `branch --show-current` succeeds with empty output
+- **THEN** inspection reports detached HEAD
+- **WHEN** the branch `for-each-ref` upstream query succeeds with empty output
+- **THEN** inspection reports no upstream
+- **THEN** neither state accepts a nonzero fallback
+
+#### Scenario: Bare repositories skip only the inapplicable query
+
+- **WHEN** successful bare-state inspection establishes a bare repository
+- **THEN** inspection skips the inapplicable top-level query
+- **THEN** every Git command it does execute MUST return success
 
 #### Scenario: Failure table stops before later false facts
 
@@ -194,15 +244,44 @@ absence.
 - **THEN** no default boolean, empty array, or omitted value is presented as a
   fact that the failed or skipped command would have established
 
+#### Scenario: Remote enumeration is atomic
+
+- **WHEN** any remote-name, fetch-URL, or push-URL command fails after zero or
+  more remote results were observed
+- **THEN** the system discards every partial remote result
+- **THEN** repository state and classification are unavailable with that exact
+  command diagnostic
+- **THEN** `structuralPushTarget` and `recovery.remotes` are unavailable with
+  that diagnostic and contain neither `pushUrls` nor a remote array
+- **THEN** no partial name, fetch URL, push URL, empty array, or omitted value is
+  reported as known remote state
+
+#### Scenario: Proven remote absence is known
+
+- **WHEN** every required remote query succeeds and remote-name enumeration
+  returns no names
+- **THEN** `recovery.remotes` is `{ state: "known", remotes: [] }`
+- **THEN** `structuralPushTarget` is the known not-ready variant with an empty
+  `pushUrls` array
+
+#### Scenario: Proven non-Git state has known empty remotes
+
+- **WHEN** the exact no-repository tuple positively establishes an absent or
+  non-Git exact child
+- **THEN** `recovery.remotes` is `{ state: "known", remotes: [] }`
+- **THEN** `structuralPushTarget` is the known not-ready variant with an empty
+  `pushUrls` array
+
 ### Requirement: Isolate Default Git Inspection From Ambient State
 
 The default inspection runner MUST construct its child-process environment by
-preserving required non-Git values such as `PATH`, removing every inherited
-environment entry whose name starts with `GIT_`, and then setting only the
-intentional Git controls `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`, and
-`GIT_CONFIG_GLOBAL=<os.devNull>`, together with `LC_ALL=C`. It MUST continue to
-pass the explicit no-optional-locks command control. It MUST NOT expose a public
-environment or test seam.
+preserving required non-Git values including the platform's real `PATH`/`Path`,
+removing every inherited environment entry whose name satisfies the
+platform-equivalent of `key.toUpperCase().startsWith("GIT_")`, and then setting
+only the intentional Git controls `GIT_OPTIONAL_LOCKS=0`,
+`GIT_CONFIG_NOSYSTEM=1`, and `GIT_CONFIG_GLOBAL=<os.devNull>`, together with
+`LC_ALL=C`. It MUST continue to pass the explicit no-optional-locks command
+control. It MUST NOT expose a public environment or test seam.
 
 #### Scenario: Ambient repository selectors cannot redirect inspection
 
@@ -215,6 +294,15 @@ environment or test seam.
   objects/refs, branch, dirty/tracked-root state, remotes, and recovery facts
 - **THEN** no B path or repository fact can make B masquerade as A or alter A's
   report
+
+#### Scenario: Mixed-case ambient Git keys are removed
+
+- **WHEN** the inherited environment contains mixed-case `Git_Dir` and
+  `git_config_global` values pointing at repository or configuration B
+- **THEN** the default runner removes both values before invoking Git
+- **THEN** a test-local fake Git executable or environment observer confirms
+  neither key reaches the child while the platform's real `PATH`/`Path` does
+- **THEN** no public environment seam is added
 
 #### Scenario: Hostile global and system configuration is ignored
 
@@ -271,14 +359,17 @@ environment or test seam.
 - **THEN** machine registration is independently inspected and truthfully
   reports `absent`, `current`, `different`, `conflicting-root`, or `invalid`
   with its diagnostic
-- **THEN** structural push readiness, registration eligibility, and mutation
-  readiness are false with empty push URLs, the selected remote name if
-  supplied, and the Git-unavailable plus any observed resource/registry reasons
+- **THEN** `structuralPushTarget` has state `"unavailable"`, `ready: false`, the
+  selected remote when supplied, the Git-unavailable diagnostic,
+  `provesWritability: false`, and no `pushUrls`
+- **THEN** registration eligibility and mutation readiness are false with the
+  Git-unavailable plus any observed resource/registry reasons
 - **THEN** `diagnostics` contains the Git-unavailable diagnostic plus any strict
   resource or invalid-registry diagnostic
 - **THEN** the recovery inventory contains only paths and state safely observed
   before return, including strict `documentPaths` and registration state when
-  those inspections succeed, no commit or remote state, and
+  those inspections succeed, no commit, `remotes` in the unavailable variant
+  with the Git-unavailable diagnostic, and
   `repositoryDiagnostic` equal to the Git-unavailable diagnostic
 - **THEN** no CaseHome file, repository, commit, push, or registration is created
 

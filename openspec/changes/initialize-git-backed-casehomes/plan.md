@@ -219,6 +219,15 @@ YAML, Zod, Vitest, OpenSpec.
   identity makes strict registry validation unsafe.
 - Modifies: unavailable recovery with
   `repositoryDiagnostic: string` equal to the unavailable repository diagnostic.
+- Modifies: `structuralPushTarget` to the exact union
+  `{ state: "known"; ready: boolean; remote?: string; pushUrls: readonly string[]; provesWritability: false } |
+{ state: "not-inspected"; ready: false; remote?: string; diagnostic: string; provesWritability: false } |
+{ state: "unavailable"; ready: false; remote?: string; diagnostic: string; provesWritability: false }`;
+  the failure variants do not contain `pushUrls`.
+- Modifies: `recovery.remotes` to
+  `{ state: "known"; remotes: readonly GitRemoteReport[] } |
+{ state: "not-inspected" | "unavailable"; diagnostic: string }`; an empty
+  remote array exists only inside a positively established known state.
 - Preserves: the production `openCaseHomeResources(caseHomePath, registry)`
   parameters and the exported `InspectGitBackedCaseHomeDependencies` and package
   API. No filesystem observer, counter, or test-only field enters production;
@@ -301,9 +310,11 @@ YAML, Zod, Vitest, OpenSpec.
   `CaseHomeResourceReport { state: "not-inspected", diagnostic }`;
   `RepositoryReport { state: "not-inspected", diagnostic }`;
   `RegistrationReport { state: "not-inspected", diagnostic }`; false
-  structural/registration/mutation readiness; exact diagnostics; and recovery
-  registration `"not-inspected"`. Inject a registration reader that fails if
-  called and prove its call count remains zero. In the dedicated
+  registration/mutation readiness; structural push target not inspected with no
+  `pushUrls`; recovery remotes not inspected with no remote array; exact
+  diagnostics; and recovery registration `"not-inspected"`. Inject a
+  registration reader that fails if called and prove its call count remains
+  zero. In the dedicated
   `inspect.path-observation.test.ts`, install hoisted test-local wrappers for
   `node:fs/promises` and the strict CaseHome resource module before dynamically
   importing `inspect.ts`. Prove the exact link entry receives one `lstat`, no
@@ -315,9 +326,10 @@ YAML, Zod, Vitest, OpenSpec.
   named field: `classification: "unavailable"`; canonical `paths`; truthful
   strict resource state; `RepositoryReport` with
   `{ state: "unavailable", diagnostic }`; independently inspected registration;
-  false readiness; combined diagnostics; and recovery containing observed
-  `documentPaths`/registration but no Git commit or remotes. Cover valid,
-  invalid, and absent resources plus
+  unavailable structural push target with no `pushUrls`; false eligibility and
+  mutation readiness; combined diagnostics; and recovery containing observed
+  `documentPaths`/registration, no Git commit, and unavailable remotes with no
+  remote array. Cover valid, invalid, and absent resources plus
   absent/current/different/conflicting-root/invalid registration, and prove
   `absent` is returned only after a successful registry read with no mapping.
 
@@ -331,27 +343,49 @@ YAML, Zod, Vitest, OpenSpec.
   execute no later Git command, and never report the failure as absent, unborn,
   detached, dirty, no-upstream, untracked root, no-remote, or empty URL.
 
-  Separately prove only the recognized `LC_ALL=C` no-repository result with no
-  exact `.git` entry yields absent/non-Git, and only
-  `rev-parse --verify --quiet HEAD` with the expected empty-output miss yields
-  unborn. Use `branch --show-current` and a branch-ref upstream query that return
-  success with empty output to prove detached/no-upstream. Prove a bare result
-  skips top-level inspection rather than treating its inapplicable failure as
-  unavailable.
+  Add tuple-table REDs proving absent/non-Git is allowed only for
+  `rev-parse --absolute-git-dir` when the exact `.git` entry is absent, exit is
+  `128`, trimmed stdout is empty, and trimmed C-locale stderr is exactly one
+  nonempty line beginning `fatal: not a git repository`. Vary the command,
+  `.git` precondition, exit, stdout, locale/prefix, zero lines, and multiple
+  nonempty lines independently; every mismatch must be unavailable. Prove
+  unborn is allowed only for `rev-parse --verify --quiet HEAD`, exit `1`, and
+  empty trimmed stdout/stderr; vary each element and require unavailable. Use
+  `branch --show-current` and an exact branch `for-each-ref` upstream query that
+  return exit-zero empty output to prove detached/no-upstream without nonzero
+  fallback. Prove a bare result skips top-level inspection and every command it
+  does execute succeeds.
+
+  For every identity, Git-unavailable, and required-command-failure row, assert
+  the exact `structuralPushTarget` and `recovery.remotes` discriminants and
+  property absence: not-inspected for exact child identity conflicts;
+  unavailable for Git/tool/command failures; no `pushUrls` or remote array on
+  either failure state. Prove a positively established non-Git child and a
+  successful empty remote-name query use known empty remote inventories.
+
+  Make remote enumeration table-driven and atomic. Fail remote-name, a later
+  remote's fetch URL, and a later remote's push URL after earlier values were
+  observed. Each row discards every partial remote, returns repository,
+  structural push target, and recovery remotes unavailable with the same
+  diagnostic, and exposes no empty array as failed/skipped state.
 
   In `git.test.ts`, exercise `createGitRunner()` without a public environment
   seam. Build distinguishable repositories A and B, then run A with ambient
   `GIT_DIR=B`, `GIT_WORK_TREE=A`, `GIT_INDEX_FILE=B`, `GIT_COMMON_DIR`,
   `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`,
   ref/config overrides, and hostile global/system configuration pointing to B.
-  Also set an arbitrary trace-producing `GIT_*` proof value. Prove the report
+  Also set mixed-case `Git_Dir` and `git_config_global` plus an arbitrary
+  trace-producing `GIT_*` proof value. Prove the report
   contains only A's root/common dir/index/object/ref/branch/dirty/tracked-root/
   remote facts, the trace artifact is absent, and B cannot masquerade as or
-  alter A. Prove `PATH` remains usable and the child Git environment gets only
+  alter A. Use a test-local fake Git executable or equivalent child-environment
+  observer, reached through the real preserved platform `PATH`/`Path`, to prove
+  `Git_Dir`, `git_config_global`, and every other case variant whose uppercase
+  form starts `GIT_` is absent. Prove the child Git environment gets only
   intentional `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`,
-  `GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C` after all ambient `GIT_*` values
-  are removed. Keep environment setup sequential and restore the process
-  environment in `finally`.
+  `GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C` after ambient Git keys are
+  removed. Keep environment setup sequential and restore the process
+  environment in `finally`; add no public seam.
 
 - [ ] **Step 4: Run inspection tests and record RED**
 
@@ -365,10 +399,13 @@ YAML, Zod, Vitest, OpenSpec.
   ```
 
   Expected: FAIL against the delivered Task 2 boundary because required command
-  failures collapse into false ordinary state, symlink/non-directory rejection
+  failures collapse into false ordinary state, the permitted nonzero tuples are
+  not exact, structural/recovery remote failure states still use empty arrays,
+  remote enumeration exposes partial results, symlink/non-directory rejection
   still invokes strict registration, and the default runner inherits ambient
-  Git selectors/configuration. The original missing-boundary and recovery REDs
-  remain historical evidence only in `task-2-report.md`.
+  Git selectors/configuration including mixed-case keys. The original
+  missing-boundary and recovery REDs remain historical evidence only in
+  `task-2-report.md`.
 
 - [ ] **Step 5: Implement the direct Git runner and exact inspection**
 
@@ -381,19 +418,34 @@ YAML, Zod, Vitest, OpenSpec.
   exactly once.
 
   Use `execFileResult("git", args, { cwd, env })`; never use a shell command.
-  Build `env` by copying required non-Git process values, deleting every key
-  beginning `GIT_`, then setting only `GIT_OPTIONAL_LOCKS=0`,
+  Build `env` by copying required non-Git process values including the
+  platform's real `PATH`/`Path`, deleting every key for which the
+  platform-equivalent of `key.toUpperCase().startsWith("GIT_")` is true, then
+  setting only `GIT_OPTIONAL_LOCKS=0`,
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C`.
   Retain explicit no-optional-lock command arguments. Do not add a public
   environment/test seam.
 
   Replace generic undefined/false/empty fallbacks with command-specific result
-  classification. Recognize only the sanitized no-repository discovery state
-  and quiet expected HEAD miss; use successful-empty branch/upstream commands,
-  and inspect bare state before top-level. Any other required nonzero result
-  returns unavailable with command/exit/stderr context, false readiness, bounded
-  recovery carrying the same `repositoryDiagnostic`, and no later Git call or
-  inferred fact.
+  classification. Recognize absent/non-Git only for
+  `rev-parse --absolute-git-dir` with absent exact `.git`, exit `128`, empty
+  trimmed stdout, and exactly one nonempty trimmed C-locale stderr line beginning
+  `fatal: not a git repository`. Recognize unborn only for
+  `rev-parse --verify --quiet HEAD`, exit `1`, and empty trimmed stdout/stderr.
+  Use exit-zero empty `branch --show-current` and branch `for-each-ref` upstream
+  queries, and inspect bare state before skipping its inapplicable top-level
+  query. Any tuple mismatch or other required nonzero result returns unavailable
+  with command/exit/stderr context, false readiness, bounded recovery carrying
+  the same `repositoryDiagnostic`, and no later Git call or inferred fact.
+
+  Implement the exact structural push-target and recovery-remotes discriminated
+  unions from the interface section. Identity conflicts use not-inspected;
+  Git/tool/command failures use unavailable; neither variant contains an empty
+  `pushUrls` or remote array. Positively established non-Git or no-remotes state
+  may use known empty arrays. Accumulate remote names and URLs privately and
+  publish them only after every required query succeeds; any failure discards
+  all partial remote data and makes repository, structural push target, and
+  recovery remote inventory unavailable with one diagnostic.
 
   Derive the exact child without recursively scanning, reject symlink identity
   before following it, compare real paths to Git's `--show-toplevel`, report an
@@ -451,13 +503,19 @@ YAML, Zod, Vitest, OpenSpec.
   absolute-Git-directory failure to absent, a status failure to dirty, an
   unexpected HEAD failure to unborn, and a remote/get-url failure to no
   remote/empty URL; each mutation must fail only its matching table row and the
-  no-later-facts assertion. Restore after each. Temporarily call the strict
+  no-later-facts assertion. Separately relax each no-repository and unborn tuple
+  member, add `pushUrls: []` or `remotes: []` to failure variants, and publish a
+  partial first remote before a later URL failure; each mutation must fail only
+  its exact tuple, property-absence, or atomic-enumeration witness. Restore after
+  each. Temporarily call the strict
   registration reader on a symlink/non-directory exit and require the
   registration-zero-call and target-zero-access witnesses to fail. Finally pass
-  ambient `process.env` unchanged and require the A/B, hostile-config, and
-  trace-artifact isolation witnesses to fail while the ordinary clean-environment
-  case remains green. Restore production after every mutation and rerun the
-  complete focused GREEN.
+  ambient `process.env` unchanged and require the A/B, hostile-config,
+  mixed-case-key, and trace-artifact isolation witnesses to fail while the
+  ordinary clean-environment and real-`PATH` case remain green. Then make the
+  filter case-sensitive and require only the mixed-case observer witness to
+  fail. Restore production after every mutation and rerun the complete focused
+  GREEN.
 
 - [ ] **Step 8: Mark tasks 2.1 and 2.2 complete, commit, and push**
 

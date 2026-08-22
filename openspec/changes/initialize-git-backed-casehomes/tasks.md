@@ -25,8 +25,11 @@
       seams, normalized no-optional-lock Git command audits,
       conflicting-registration ineligibility, exact public early-report
       discriminants with identity-conflict registration not inspected,
-      command-specific unavailable failures without later false facts, sanitized
-      ambient Git selectors/configuration, and raw byte/ref immutability.
+      exact allowed nonzero result tuples, discriminated push-target and recovery
+      remote states with atomic remote enumeration, command-specific unavailable
+      failures without later false facts, case-insensitively sanitized ambient
+      Git selectors/configuration with real PATH preservation, and raw byte/ref
+      immutability.
 - [ ] 2.2 Implement the smallest snapshot and exact read-only inspection
       corrections through injectable Git and registration boundaries, then make
       the focused tests pass without entering Task 3.
