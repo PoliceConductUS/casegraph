@@ -26,7 +26,7 @@
 
 ## 4. Change Verification
 
-- [ ] 4.1 Run focused resource tests and the complete repository validation,
+- [x] 4.1 Run focused resource tests and the complete repository validation,
       then resolve every failure within this change's scope.
 - [ ] 4.2 Verify Issue #40 acceptance-criteria coverage, complete the OpenSpec
       verification and retrospective artifacts, and archive the accepted change
