@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   chmod,
   lstat,
@@ -230,6 +230,58 @@ describe("CaseHome machine registration reads", () => {
       `Invalid CaseHome registration at ${registrationPath}: registry entry is a directory, not a regular file`,
     );
     expect((await lstat(registrationPath)).isDirectory()).toBe(true);
+  });
+
+  test("rejects a casehomes.yaml FIFO unchanged without reading or publishing", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    await execFileAsync("mkfifo", [registrationPath]);
+    const writerScript = `
+      import { writeFile } from "node:fs/promises";
+      await writeFile(${JSON.stringify(registrationPath)}, "not yaml\\n");
+    `;
+    const blockedWriter = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", writerScript],
+      { cwd: process.cwd(), stdio: "ignore" },
+    );
+    const writerFinished = new Promise<void>((resolve, reject) => {
+      blockedWriter.once("error", reject);
+      blockedWriter.once("exit", () => resolve());
+    });
+    let publicationCount = 0;
+
+    try {
+      await expect(
+        new CaseHomeRegistrationStore({
+          publish: () => {
+            publicationCount += 1;
+            return Promise.resolve();
+          },
+        }).register({
+          configHome,
+          caseId: "PoliceConductUS/example",
+          rootPath,
+        }),
+      ).rejects.toThrow(
+        `Invalid CaseHome registration at ${registrationPath}: registry entry is a FIFO, not a regular file`,
+      );
+      expect(publicationCount).toBe(0);
+      expect((await lstat(registrationPath)).isFIFO()).toBe(true);
+      expect(await readdir(configHome)).toEqual(["casehomes.yaml"]);
+      expect(blockedWriter.exitCode).toBeNull();
+      expect(blockedWriter.signalCode).toBeNull();
+    } finally {
+      if (
+        blockedWriter.exitCode === null &&
+        blockedWriter.signalCode === null
+      ) {
+        blockedWriter.kill("SIGTERM");
+      }
+      await writerFinished;
+    }
   });
 
   test("rejects malformed YAML with its parser and casehomes.yaml context", async () => {
@@ -484,6 +536,44 @@ describe("CaseHome machine registration writes", () => {
     });
 
     expect((await stat(registrationPath)).mode & 0o777).toBe(0o640);
+  });
+
+  test("atomically replaces casehomes.yaml on the default publisher path", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const existingRoot = await createCaseHomeRoot(directory, "existing");
+    const requestedRoot = await createCaseHomeRoot(directory, "requested");
+    const originalBytes = Buffer.from(
+      `PoliceConductUS/existing: ${existingRoot}\n`,
+    );
+    const replacementBytes = Buffer.from(
+      `PoliceConductUS/existing: ${existingRoot}\nPoliceConductUS/requested: ${requestedRoot}\n`,
+    );
+    const registrationPath = await writeRegistration(
+      configHome,
+      originalBytes.toString(),
+    );
+    const originalEntry = await lstat(registrationPath);
+    const originalHandle = await open(registrationPath, "r");
+
+    try {
+      await expect(
+        new CaseHomeRegistrationStore().register({
+          configHome,
+          caseId: "PoliceConductUS/requested",
+          rootPath: requestedRoot,
+        }),
+      ).resolves.toBe("created");
+
+      const replacementEntry = await lstat(registrationPath);
+      expect(replacementEntry.ino).not.toBe(originalEntry.ino);
+      await expect(readFile(registrationPath)).resolves.toEqual(
+        replacementBytes,
+      );
+      await expect(originalHandle.readFile()).resolves.toEqual(originalBytes);
+    } finally {
+      await originalHandle.close();
+    }
   });
 
   test("returns unchanged without writing for the identical ID and real path", async () => {
