@@ -22,8 +22,10 @@ only in a particular case, such as why a passage matters to a claim, whether an
 authority supplies fair warning for one defendant's conduct, and which filing
 used that analysis.
 
-CaseGraph also needs deterministic artifact contracts that can be read and
-written by the CLI and skills. The user's intake projects use versioned,
+CaseGraph also needs deterministic artifact contracts exposed through the
+capability-scoped read API and persisted through the JSONL mutation CLI. Skills
+do not receive raw storage paths or patch sidecar YAML. The user's intake
+projects use versioned,
 Kubernetes-style envelopes, shared readers and writers, and kind-specific Zod
 validation for this purpose.
 
