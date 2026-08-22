@@ -51,6 +51,17 @@ package-path resolution remains anchored to the registered primary CaseHome.
 The linked worktree's nested filesystem location must not change the meaning of
 portable relative paths.
 
+A CaseHome may have zero or one active CaseGraph-managed writable worktree.
+CaseGraph must refuse to start another mutating operation while one is active.
+The user must first finish the active operation or explicitly abandon it.
+Abandonment is a destructive action because it may discard uncommitted case
+work and therefore requires explicit confirmation. Read-only inspection does
+not count as an active writer.
+
+CaseGraph does not support stacked CaseHome mutation branches. That constraint
+may be revisited only when a concrete workflow requires concurrent writers and
+defines how conflicting graph states are reconciled.
+
 Squash merging is compatible with this model. The resulting mainline commit is
 the accepted CaseHome state. CaseGraph does not copy Git parentage into YAML to
 preserve the pre-squash branch shape.
@@ -76,6 +87,7 @@ This ADR does not define:
 - branch-retention policy after a squash merge
 - remote hosting or backup policy
 - conflict-resolution behavior
+- the commands and prompts used to finish or abandon an active operation
 
 ## Consequences
 
