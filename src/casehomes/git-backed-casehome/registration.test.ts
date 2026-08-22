@@ -8,6 +8,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -57,6 +58,34 @@ async function writeRegistration(
   return registrationPath;
 }
 
+async function guardIdentity(guardPath: string) {
+  const entry = await lstat(guardPath);
+  return { device: entry.dev, inode: entry.ino };
+}
+
+async function publishRegistrationForTest(input: {
+  readonly content: string;
+  readonly destinationPath: string;
+  readonly mode: number;
+  readonly temporaryPath: string;
+}): Promise<void> {
+  await writeFile(input.temporaryPath, input.content, {
+    flag: "wx",
+    mode: input.mode,
+  });
+  await chmod(input.temporaryPath, input.mode);
+  await rename(input.temporaryPath, input.destinationPath);
+}
+
+async function rejectionOf(operation: Promise<unknown>): Promise<Error> {
+  try {
+    await operation;
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  throw new Error("Expected operation to reject");
+}
+
 function createObservedGuard() {
   const state = { acquired: 0, released: 0 };
   return {
@@ -65,6 +94,7 @@ function createObservedGuard() {
       state.acquired += 1;
       await writeFile(guardPath, "held\n", { flag: "wx", mode: 0o600 });
       return {
+        identity: await guardIdentity(guardPath),
         release: async () => {
           state.released += 1;
           await unlink(guardPath);
@@ -78,7 +108,21 @@ function retainGuardOnCleanup(cleanupDiagnostic: string) {
   return async (guardPath: string) => {
     await writeFile(guardPath, "retained\n", { flag: "wx", mode: 0o600 });
     return {
+      identity: await guardIdentity(guardPath),
       release: () => Promise.reject(new Error(cleanupDiagnostic)),
+    };
+  };
+}
+
+function removeGuardOnCleanup(cleanupDiagnostic: string) {
+  return async (guardPath: string) => {
+    await writeFile(guardPath, "acquired\n", { flag: "wx", mode: 0o600 });
+    return {
+      identity: await guardIdentity(guardPath),
+      release: async () => {
+        await unlink(guardPath);
+        throw new Error(cleanupDiagnostic);
+      },
     };
   };
 }
@@ -835,6 +879,7 @@ describe("serialized CaseHome machine registration", () => {
     const holderStore = new CaseHomeRegistrationStore({
       acquireGuard: async (candidateGuardPath) => {
         const holderGuard = await open(candidateGuardPath, "wx", 0o600);
+        const holderEntry = await holderGuard.stat();
         signalGuardAcquired();
         await snapshotReadAllowed;
         await writeFile(
@@ -843,6 +888,7 @@ describe("serialized CaseHome machine registration", () => {
           { mode: 0o600 },
         );
         return {
+          identity: { device: holderEntry.dev, inode: holderEntry.ino },
           release: async () => {
             await holderGuard.close();
             await unlink(candidateGuardPath);
@@ -1028,6 +1074,112 @@ describe("serialized CaseHome machine registration", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  test("reports absent ownership after successful publication removes the guard pathname", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    const store = new CaseHomeRegistrationStore({
+      publish: async (input) => {
+        await publishRegistrationForTest(input);
+        await unlink(guardPath);
+      },
+    });
+
+    const error = await rejectionOf(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    );
+
+    expect(error.message).toContain(guardPath);
+    expect(error.message).toContain("guard state: absent/ownership-lost");
+    expect(error.message).not.toContain("guard state: retained");
+    expect(error.message).toContain("registry published: true");
+    await expect(readFile(registrationPath, "utf8")).resolves.toBe(
+      `PoliceConductUS/example: ${rootPath}\n`,
+    );
+    await expect(lstat(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("reports unknown when guard-state inspection fails", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = await writeRegistration(
+      configHome,
+      `PoliceConductUS/example: ${rootPath}\n`,
+    );
+    const guardPath = `${registrationPath}.lock`;
+    let inspectionCount = 0;
+    const dependencies = {
+      acquireGuard: retainGuardOnCleanup("injected cleanup failure"),
+      inspectGuard: () => {
+        inspectionCount += 1;
+        return Promise.reject(new Error("injected inspection failure"));
+      },
+    };
+    const store = new CaseHomeRegistrationStore(dependencies);
+
+    const error = await rejectionOf(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    );
+
+    expect(error.message).toContain("injected cleanup failure");
+    expect(error.message).toContain("injected inspection failure");
+    expect(error.message).toContain("guard state: unknown");
+    expect(error.message).not.toContain("guard state: retained");
+    expect(error.message).not.toContain("guard state: absent/ownership-lost");
+    expect(error.message).toContain("registry published: false");
+    expect(inspectionCount).toBe(1);
+    expect((await lstat(guardPath)).isFile()).toBe(true);
+  });
+
+  test("leaves a distinguishable foreign guard replacement unchanged", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    const foreignBytes = Buffer.from("foreign replacement\n");
+    let foreignIdentity:
+      | { readonly device: number; readonly inode: number }
+      | undefined;
+    let publicationCount = 0;
+    const store = new CaseHomeRegistrationStore({
+      publish: async (input) => {
+        publicationCount += 1;
+        await publishRegistrationForTest(input);
+        await unlink(guardPath);
+        await writeFile(guardPath, foreignBytes, { flag: "wx", mode: 0o600 });
+        foreignIdentity = await guardIdentity(guardPath);
+      },
+    });
+
+    const error = await rejectionOf(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    );
+
+    expect(error.message).toContain(guardPath);
+    expect(error.message).toContain("guard state: absent/ownership-lost");
+    expect(error.message).not.toContain("guard state: retained");
+    expect(error.message).toContain("registry published: true");
+    expect(publicationCount).toBe(1);
+    await expect(readFile(guardPath)).resolves.toEqual(foreignBytes);
+    await expect(guardIdentity(guardPath)).resolves.toEqual(foreignIdentity);
+  });
+
   test("retains and reports the guard when cleanup fails before publication", async () => {
     const directory = await temporaryDirectory("casegraph-cases-");
     const configHome = await temporaryDirectory("casegraph-config-");
@@ -1037,8 +1189,23 @@ describe("serialized CaseHome machine registration", () => {
       `PoliceConductUS/example: ${rootPath}\n`,
     );
     const guardPath = `${registrationPath}.lock`;
+    const retainedBytes = Buffer.from("retained acquired guard\n");
+    let acquiredIdentity:
+      | { readonly device: number; readonly inode: number }
+      | undefined;
     const store = new CaseHomeRegistrationStore({
-      acquireGuard: retainGuardOnCleanup("injected cleanup failure"),
+      acquireGuard: async (candidateGuardPath) => {
+        await writeFile(candidateGuardPath, retainedBytes, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        const identity = await guardIdentity(candidateGuardPath);
+        acquiredIdentity = identity;
+        return {
+          identity,
+          release: () => Promise.reject(new Error("injected cleanup failure")),
+        };
+      },
     });
 
     const registration = store.register({
@@ -1049,7 +1216,10 @@ describe("serialized CaseHome machine registration", () => {
 
     await expect(registration).rejects.toThrow("injected cleanup failure");
     await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("guard state: retained");
     await expect(registration).rejects.toThrow("registry published: false");
+    await expect(readFile(guardPath)).resolves.toEqual(retainedBytes);
+    await expect(guardIdentity(guardPath)).resolves.toEqual(acquiredIdentity);
     expect((await lstat(guardPath)).isFile()).toBe(true);
   });
 
@@ -1071,6 +1241,7 @@ describe("serialized CaseHome machine registration", () => {
 
     await expect(registration).rejects.toThrow("injected cleanup failure");
     await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("guard state: retained");
     await expect(registration).rejects.toThrow("registry published: true");
     await expect(readFile(registrationPath, "utf8")).resolves.toBe(
       `PoliceConductUS/example: ${rootPath}\n`,
@@ -1105,9 +1276,44 @@ describe("serialized CaseHome machine registration", () => {
       "cleanup after validation failed",
     );
     await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("guard state: retained");
     await expect(registration).rejects.toThrow("registry published: false");
     await expect(readFile(registrationPath)).resolves.toEqual(originalBytes);
     expect((await lstat(guardPath)).isFile()).toBe(true);
+  });
+
+  test("reports primary validation and absent-ownership cleanup failures together", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = await writeRegistration(
+      configHome,
+      "PoliceConductUS/example: [\n",
+    );
+    const guardPath = `${registrationPath}.lock`;
+    const originalBytes = await readFile(registrationPath);
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: removeGuardOnCleanup(
+        "cleanup after validation removed guard",
+      ),
+    });
+
+    const error = await rejectionOf(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    );
+
+    expect(error.message).toContain("Flow sequence in block collection");
+    expect(error.message).toContain("cleanup after validation removed guard");
+    expect(error.message).toContain(guardPath);
+    expect(error.message).toContain("guard state: absent/ownership-lost");
+    expect(error.message).not.toContain("guard state: retained");
+    expect(error.message).toContain("registry published: false");
+    await expect(readFile(registrationPath)).resolves.toEqual(originalBytes);
+    await expect(lstat(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("reports publication and cleanup failures together without masking publication state", async () => {
@@ -1137,6 +1343,7 @@ describe("serialized CaseHome machine registration", () => {
       "cleanup after publication failed",
     );
     await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("guard state: retained");
     await expect(registration).rejects.toThrow("registry published: false");
     await expect(lstat(registrationPath)).rejects.toMatchObject({
       code: "ENOENT",

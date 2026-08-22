@@ -1,6 +1,6 @@
 ## 1. Machine Registration
 
-- [ ] 1.1 Add focused failing tests for strict `casehomes.yaml` reads,
+- [x] 1.1 Add focused failing tests for strict `casehomes.yaml` reads,
       canonical real root paths, identical no-op registration, conflicting
       ID/path pairs, inverse root/ID conflicts, malformed mappings, unchanged
       bytes on every rejection, regular registry/root entries, new `0600` and
@@ -9,7 +9,7 @@
       `unknown` guard cleanup state, foreign-replacement preservation, dual
       primary-plus-cleanup diagnostic preservation, and exclusive atomic
       publication without retry.
-- [ ] 1.2 Implement the smallest injectable registration boundary and make the
+- [x] 1.2 Implement the smallest injectable registration boundary and make the
       focused tests pass within cooperative-writer scope without changing
       unrelated CaseHome behavior.
 

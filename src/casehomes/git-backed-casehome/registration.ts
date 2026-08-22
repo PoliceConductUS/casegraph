@@ -24,15 +24,26 @@ interface RegistrationPublishInput {
 type RegistrationPublisher = (input: RegistrationPublishInput) => Promise<void>;
 
 interface RegistrationGuard {
+  readonly identity: RegistrationGuardIdentity;
   release(): Promise<void>;
+}
+
+interface RegistrationGuardIdentity {
+  readonly device: number;
+  readonly inode: number;
 }
 
 type RegistrationGuardAcquirer = (
   guardPath: string,
 ) => Promise<RegistrationGuard>;
 
+type RegistrationGuardInspector = (
+  guardPath: string,
+) => Promise<RegistrationGuardIdentity | undefined>;
+
 interface CaseHomeRegistrationStoreDependencies {
   readonly acquireGuard?: RegistrationGuardAcquirer;
+  readonly inspectGuard?: RegistrationGuardInspector;
   readonly publish?: RegistrationPublisher;
   readonly temporaryId?: () => string;
 }
@@ -280,13 +291,52 @@ async function publishRegistrationAtomically({
   await rename(temporaryPath, destinationPath);
 }
 
+function registrationGuardIdentity(entry: {
+  readonly dev: number;
+  readonly ino: number;
+}): RegistrationGuardIdentity {
+  return { device: entry.dev, inode: entry.ino };
+}
+
+function sameGuardIdentity(
+  left: RegistrationGuardIdentity,
+  right: RegistrationGuardIdentity,
+): boolean {
+  return left.device === right.device && left.inode === right.inode;
+}
+
+async function inspectRegistrationGuard(
+  guardPath: string,
+): Promise<RegistrationGuardIdentity | undefined> {
+  try {
+    return registrationGuardIdentity(await lstat(guardPath));
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 async function acquireRegistrationGuard(
   guardPath: string,
+  inspectGuard: RegistrationGuardInspector,
 ): Promise<RegistrationGuard> {
   const guardHandle = await open(guardPath, "wx", 0o600);
+  const identity = registrationGuardIdentity(await guardHandle.stat());
   return {
+    identity,
     async release(): Promise<void> {
       await guardHandle.close();
+      const observedIdentity = await inspectGuard(guardPath);
+      if (observedIdentity === undefined) {
+        throw new Error(
+          `Acquired CaseHome registration guard pathname is absent at ${guardPath}`,
+        );
+      }
+      if (!sameGuardIdentity(identity, observedIdentity)) {
+        throw new Error(
+          `Acquired CaseHome registration guard ownership was lost at ${guardPath}`,
+        );
+      }
       await unlink(guardPath);
     },
   };
@@ -303,34 +353,79 @@ function compareCaseIds(
 
 function cleanupFailure(input: {
   readonly cleanupError: Error;
+  readonly guardState: "retained" | "absent/ownership-lost" | "unknown";
   readonly guardPath: string;
+  readonly inspectionError: Error | undefined;
   readonly primaryError: Error | undefined;
   readonly published: boolean;
 }): Error {
-  const cleanupDiagnostic = `guard cleanup diagnostic at ${input.guardPath}: ${input.cleanupError.toString()}; retained guard path ${input.guardPath}; registry published: ${String(input.published)}`;
+  const inspectionDiagnostic =
+    input.inspectionError === undefined
+      ? ""
+      : `; guard state inspection diagnostic: ${input.inspectionError.toString()}`;
+  const cleanupDiagnostic = `guard cleanup diagnostic at ${input.guardPath}: ${input.cleanupError.toString()}; guard state: ${input.guardState}${inspectionDiagnostic}; registry published: ${String(input.published)}`;
+  const cleanupCauses = [input.cleanupError];
+  if (input.inspectionError !== undefined) {
+    cleanupCauses.push(input.inspectionError);
+  }
   if (input.primaryError !== undefined) {
     return new Error(
       `CaseHome registration operation failed; primary diagnostic: ${input.primaryError.toString()}; ${cleanupDiagnostic}`,
       {
         cause: new AggregateError(
-          [input.primaryError, input.cleanupError],
+          [input.primaryError, ...cleanupCauses],
           "Registration and guard cleanup both failed",
         ),
       },
     );
   }
   return new Error(`CaseHome registration ${cleanupDiagnostic}`, {
-    cause: input.cleanupError,
+    cause:
+      cleanupCauses.length === 1
+        ? input.cleanupError
+        : new AggregateError(
+            cleanupCauses,
+            "Guard cleanup and inspection failed",
+          ),
   });
+}
+
+async function observeGuardCleanupState(input: {
+  readonly guard: RegistrationGuard;
+  readonly guardPath: string;
+  readonly inspectGuard: RegistrationGuardInspector;
+}): Promise<{
+  readonly inspectionError: Error | undefined;
+  readonly state: "retained" | "absent/ownership-lost" | "unknown";
+}> {
+  try {
+    const observedIdentity = await input.inspectGuard(input.guardPath);
+    if (
+      observedIdentity !== undefined &&
+      sameGuardIdentity(input.guard.identity, observedIdentity)
+    ) {
+      return { inspectionError: undefined, state: "retained" };
+    }
+    return {
+      inspectionError: undefined,
+      state: "absent/ownership-lost",
+    };
+  } catch (error) {
+    return { inspectionError: asError(error), state: "unknown" };
+  }
 }
 
 export class CaseHomeRegistrationStore {
   readonly #acquireGuard: RegistrationGuardAcquirer;
+  readonly #inspectGuard: RegistrationGuardInspector;
   readonly #publish: RegistrationPublisher;
   readonly #temporaryId: () => string;
 
   constructor(dependencies: CaseHomeRegistrationStoreDependencies = {}) {
-    this.#acquireGuard = dependencies.acquireGuard ?? acquireRegistrationGuard;
+    this.#inspectGuard = dependencies.inspectGuard ?? inspectRegistrationGuard;
+    this.#acquireGuard =
+      dependencies.acquireGuard ??
+      ((guardPath) => acquireRegistrationGuard(guardPath, this.#inspectGuard));
     this.#publish = dependencies.publish ?? publishRegistrationAtomically;
     this.#temporaryId = dependencies.temporaryId ?? randomUUID;
   }
@@ -468,9 +563,16 @@ export class CaseHomeRegistrationStore {
       guardCleanupError = asError(error);
     }
     if (guardCleanupError !== undefined) {
+      const observation = await observeGuardCleanupState({
+        guard,
+        guardPath,
+        inspectGuard: this.#inspectGuard,
+      });
       throw cleanupFailure({
         cleanupError: guardCleanupError,
+        guardState: observation.state,
         guardPath,
+        inspectionError: observation.inspectionError,
         primaryError,
         published,
       });
