@@ -1,10 +1,10 @@
 ## 1. Machine Registration
 
-- [ ] 1.1 Add focused failing tests for strict `casehomes.yaml` reads,
+- [x] 1.1 Add focused failing tests for strict `casehomes.yaml` reads,
       canonical real root paths, identical no-op registration, conflicting
       ID/path pairs, inverse root/ID conflicts, malformed mappings, unchanged
       bytes on every rejection, and atomic publication.
-- [ ] 1.2 Implement the smallest injectable registration boundary and make the
+- [x] 1.2 Implement the smallest injectable registration boundary and make the
       focused tests pass.
 
 ## 2. Read-Only Primary Repository Inspection
