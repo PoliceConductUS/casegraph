@@ -99,6 +99,11 @@ package-path entries.
 The complete kind-specific configuration schemas are product behavior that
 must be specified in OpenSpec before implementation.
 
+For a CaseHome, the configuration path is exactly
+`<case-folder>/casegraph/config.yaml`, alongside the CaseHome root at
+`<case-folder>/casegraph/root.yaml`. Machine-local registration points to the
+root file; it does not replace or duplicate the portable configuration.
+
 ### Resolve identities independently of physical layout
 
 A resolver accepts a scoped package name and selector, rejects selectors other
