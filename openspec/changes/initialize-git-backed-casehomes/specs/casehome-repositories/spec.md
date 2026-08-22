@@ -23,8 +23,12 @@ surrounding CaseFolder outside that repository.
 - **THEN** preparation initializes the exact child as a distinct repository
 - **THEN** every pre-existing outer-owned file byte, index entry, ref, branch,
   remote, and upstream remains unchanged
-- **THEN** the outer repository status reports the expected newly untracked
-  `casegraph/` child without changing any pre-existing status entry
+- **THEN** every pre-existing outer repository status entry remains unchanged
+- **THEN** the only permitted outer status delta, if Git reports one, is Git's
+  natural representation of the nested CaseHome child
+- **THEN** preparation does not require a new status entry when outer ignore
+  rules suppress the child or adoption starts with child content already
+  represented in outer status
 - **THEN** post-preparation inspection reports the child as the CaseHome Git root
 
 #### Scenario: Symlinked CaseHome child is rejected

@@ -59,8 +59,12 @@ initializing an otherwise missing, empty, or explicitly approved exact child as
 a distinct repository. A bare repository cannot be primary. Any `.git` file is
 also ineligible, whether it identifies a linked worktree, a separate-git-dir
 checkout, or a submodule. Preparation preserves every pre-existing outer-owned
-byte and Git index/ref/branch/remote/upstream value, while the new nested
-`casegraph/` child is expected to appear as a new untracked outer status entry.
+byte, Git index/ref/branch/remote/upstream value, and status entry. The only
+permitted outer status delta, if Git reports one, is Git's natural
+representation of the nested CaseHome child. Outer ignore rules may suppress
+that representation, and adoption may begin with child content already
+represented in outer status, so preparation does not require a new status
+entry.
 
 ### Inspect through strict resources and exact Git commands
 
@@ -104,8 +108,10 @@ overwrites `root.yaml`. A file or symlink at `casegraph`, invalid rooted graph,
 existing mismatched repository, bare repository, or any gitfile checkout fails.
 An inherited outer repository is reported but does not block initializing the
 exact eligible child; tests snapshot its files, index, refs, branches, remotes,
-and upstreams before and after, then separately assert the expected new
-untracked `casegraph/` status entry.
+upstreams, and status entries before and after. Tests permit only Git's natural
+representation of the nested CaseHome child as a status delta, if any, and
+cover suppression by outer ignore rules and adoption of already-present child
+content without requiring a new entry.
 
 The Git runner initializes only the CaseHome. Create mode writes the missing
 empty-membership root through `writeResourceDocument`; both modes reopen through

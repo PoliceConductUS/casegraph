@@ -244,8 +244,11 @@ YAML, Zod, Vitest, OpenSpec.
   an ordinary outer folder and a separately committed outer Git repository;
   prove every pre-existing outer-owned file byte, index entry, ref, branch,
   remote, and upstream remains unchanged while the exact child becomes a
-  distinct repository. Parse outer status separately and assert the expected
-  new untracked `casegraph/` entry without changing pre-existing status entries.
+  distinct repository. Parse outer status separately, prove every pre-existing
+  entry remains unchanged, and permit only Git's natural representation of the
+  nested CaseHome child as a delta, if any. Add an outer `.gitignore` case that
+  suppresses the child and an adoption case whose already-present child content
+  is already represented in outer status; neither case requires a new entry.
 
   First write a caller-supplied strict Case with nonempty `spec.resources` and
   prove create mode rejects it before creating any CaseFolder, child, root, Git

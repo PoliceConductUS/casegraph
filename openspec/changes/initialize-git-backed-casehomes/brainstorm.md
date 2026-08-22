@@ -83,8 +83,10 @@ workflow.
   but does not block initializing an eligible exact child as a distinct repo.
 - An outer CaseFolder may be missing, nonempty, or itself inside a Git
   repository. Only its exact `casegraph/` child is mutated. Pre-existing
-  outer-owned state is preserved, while the new nested child is expected to
-  appear as an untracked outer status entry.
+  outer-owned state and status entries are preserved. The only permitted outer
+  status delta, if Git reports one, is Git's natural representation of the
+  nested child; outer ignore rules or already-present adoptable child content
+  may mean there is no delta.
 - Missing or empty creation accepts only a strict Case root with empty
   `spec.resources`. Existing non-Git CaseHome adoption requires explicit caller
   approval represented by `true`; `false` is the explicit declined path.
