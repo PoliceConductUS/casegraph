@@ -162,9 +162,9 @@ describe("exact child path observation", () => {
     );
 
     expect(report.classification).toBe("conflict");
-    expect(
-      observedFs.lstat.filter((call) => call === canonicalCaseHome),
-    ).toHaveLength(1);
+    expect(callsAtOrBelow(observedFs.lstat, canonicalCaseHome)).toEqual([
+      canonicalCaseHome,
+    ]);
     expect(callsAtOrBelow(observedFs.realpath, canonicalTarget)).toEqual([]);
     expect(callsAtOrBelow(observedFs.lstat, canonicalTarget)).toEqual([]);
     expect(callsAtOrBelow(observedFs.readFile, canonicalTarget)).toEqual([]);
@@ -217,9 +217,7 @@ describe("exact child path observation", () => {
     );
 
     expect(report.classification).toBe("conflict");
-    expect(observedFs.lstat.filter((call) => call === caseHome)).toHaveLength(
-      1,
-    );
+    expect(callsAtOrBelow(observedFs.lstat, caseHome)).toEqual([caseHome]);
     expect(callsAtOrBelow(observedFs.realpath, caseHome)).toEqual([]);
     expect(callsAtOrBelow(observedFs.readFile, caseHome)).toEqual([]);
     expect(callsAtOrBelow(observedFs.readdir, caseHome)).toEqual([]);
