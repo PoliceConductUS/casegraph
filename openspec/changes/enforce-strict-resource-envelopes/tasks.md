@@ -17,10 +17,10 @@
 
 ## 3. Deterministic Resource Documents
 
-- [ ] 3.1 Add focused failing tests for malformed YAML, deterministic
+- [x] 3.1 Add focused failing tests for malformed YAML, deterministic
       serialization, successful round trips, invalid-write refusal, and preserving
       an existing destination.
-- [ ] 3.2 Implement the resource document reader/writer boundary with
+- [x] 3.2 Implement the resource document reader/writer boundary with
       pre-write validation, round-trip validation, and exclusive file creation,
       then make the focused tests pass.
 
