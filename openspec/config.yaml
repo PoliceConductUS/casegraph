@@ -7,27 +7,40 @@ context: |
   the relationships between them.
 
   The immediate goal is not drafting filings. The immediate goal is creating
-  separated case workspaces that can later hold auditable case graphs and
-  analysis.
+  portable, Git-backed CaseHomes that can later hold auditable case graphs and
+  analysis while remaining separate from the case material around them.
 
   Current scope:
   - Start with the smallest useful behavior.
-  - The first command is `casegraph cases new <case-id>`.
+  - The approved bootstrap commands are `casegraph cases init
+    <github-owner>/<repository-name> [case-folder]` and `casegraph cases clone
+    <github-owner>/<repository-name> [case-folder]`.
   - Support more than one active case immediately.
-  - Keep each main case graph, analysis worktree, and workspace separated by
-    case ID.
-  - Case workspaces may be checked into this repository.
-  - Do not add a default/current case until a future spec requires it.
+  - Keep each CaseHome, operation worktree, and machine-local registration
+    separated by canonical GitHub repository identity.
+  - A CaseHome is its own Git repository; the surrounding CaseFolder is not
+    required to be a Git repository.
+  - Local aliases and local or user-global defaults require their own OpenSpec
+    behavior and remain outside the committed CaseHome.
   - Do not add graph storage, source connectors, citation auditing, reports, or
     drafting integration until current case work requires them.
 
   Terminology:
-  - "Main case graph" means the durable case graph records under
-    `workspace/<case-id>/` outside `analysis/`.
-  - "Analysis worktree" means temporary analysis working files under
-    `workspace/<case-id>/analysis/`.
-  - "Current analysis worktree" means the active analysis worktree at
-    `workspace/<case-id>/analysis/current/`.
+  - "CaseFolder" means the user-selected outer directory that may contain the
+    CaseHome and other case material such as sources, filings, discovery, and
+    data requests.
+  - "CaseHome" means the Git repository at `<case-folder>/casegraph/`.
+  - "Primary CaseHome" means the registered primary checkout at that path,
+    distinct from a linked operation worktree.
+  - "CaseHome root" means `<case-folder>/casegraph/root.yaml`.
+  - Machine-local registration maps the canonical case ID to the canonical
+    absolute CaseHome-root path ending in `/casegraph/root.yaml`.
+  - "Operation worktree" means a linked CaseHome checkout at
+    `<case-folder>/.worktrees/<operation-uid>/`, outside the primary CaseHome
+    repository.
+  - When the optional CaseFolder argument is omitted from `cases init` or
+    `cases clone`, it resolves to `./<github-owner>/<repository-name>` and the
+    CaseHome resolves to its `casegraph/` child.
   - Use "main case graph" instead of "accepted graph" for current durable case
     state.
   - "Authority" means a graph-backed legal source, not just a citation record.

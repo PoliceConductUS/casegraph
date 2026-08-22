@@ -35,6 +35,22 @@ branch with its remote. The same transaction boundary applies to graph-mutating
 docket imports and other commands when their OpenSpec contract requires a
 branch.
 
+Every operation has one immutable CUID2 operation UID. That UID identifies the
+transaction, not a graph resource. CaseGraph derives both local Git locations
+from it:
+
+```text
+branch:   casegraph/<operation-uid>
+worktree: <case-folder>/.worktrees/<operation-uid>/
+```
+
+There is no second branch or worktree identifier to reconcile. A target graph
+resource keeps its own immutable `metadata.uid`, even when the operation creates
+that resource. The operation record and resulting commit metadata identify the
+operation UID and every target resource UID, keeping the transaction connected
+to its targets without reusing one identity for two different things. One
+operation may target zero, one, or many resources.
+
 CaseGraph pushes every commit it creates immediately. There is no successful
 local-only CaseGraph commit state. A push failure leaves the operation active,
 reports the local branch and commit, and cannot be described as completed.
@@ -42,21 +58,27 @@ Finishing an operation pushes its operation-branch commits and the accepted
 primary-branch commit. CaseGraph never deletes the remote operation branch as
 part of abandonment; the remote copy remains available for recovery.
 
-CaseGraph creates operation worktrees below the registered primary CaseHome at:
+CaseGraph creates operation worktrees as siblings of the registered primary
+CaseHome, under its CaseFolder at:
 
 ```text
-<primary-casehome>/.worktrees/<operation-uid>/
+<case-folder>/.worktrees/<operation-uid>/
 ```
 
-The primary CaseHome repository must ignore `.worktrees/`. CaseGraph must refuse
-to create an operation worktree when that ignore rule is absent. The directory
-is transaction infrastructure: it is not a package, a graph resource, graph
-membership, or a location that resource discovery may traverse.
+The registered primary CaseHome remains `<case-folder>/casegraph/`. CaseGraph
+must validate that the resolved operation-worktree path is outside the primary
+CaseHome repository before creating it. The sibling `.worktrees/` directory
+does not require an ignore rule in the CaseHome repository because it is not
+inside that repository.
+
+The directory is machine-local transaction infrastructure. It is not a
+package, graph resource, graph membership, source-search location, or a
+location that resource discovery may traverse.
 
 An operation executes against its linked worktree, but CaseHome search-path and
 package-path resolution remains anchored to the registered primary CaseHome.
-The linked worktree's nested filesystem location must not change the meaning of
-portable relative paths.
+The linked worktree's sibling filesystem location must not change the meaning
+of portable relative paths.
 
 A CaseHome may have zero or one active CaseGraph-managed writable worktree.
 CaseGraph must refuse to start another mutating operation while one is active.
@@ -87,7 +109,6 @@ create numbered report-version folders to duplicate that history.
 
 This ADR does not define:
 
-- branch names
 - pull-request policy
 - the exact Conventional Commit scopes or trailer names
 - whether a command creates one commit or several commits before completion
@@ -95,6 +116,8 @@ This ADR does not define:
 - remote hosting or backup policy
 - conflict-resolution behavior
 - the commands and prompts used to finish or abandon an active operation
+- whether a surrounding CaseFolder that is independently versioned must ignore
+  `.worktrees/`
 
 ## Consequences
 

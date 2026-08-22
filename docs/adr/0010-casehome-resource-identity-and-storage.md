@@ -21,9 +21,21 @@ for those artifacts.
 
 ## Decision
 
-A CaseHome is a Git repository containing one case graph. Every graph node and
-edge has an identifier that is globally unique across the same identifier
-namespace. Nodes and edges do not have separate identifier namespaces.
+A CaseFolder is the user-selected outer directory for one legal matter. It may
+contain sources, filings, discovery, data requests, and other material that is
+not owned by CaseGraph. A CaseFolder is machine-local organization and is not
+the canonical case identity or a required Git repository.
+
+A CaseHome is the `casegraph/` child of a CaseFolder:
+
+```text
+<case-folder>/casegraph/
+```
+
+The CaseHome is a Git repository containing one case graph. The surrounding
+CaseFolder is not part of that repository. Every graph node and edge has an
+identifier that is globally unique across the same identifier namespace. Nodes
+and edges do not have separate identifier namespaces.
 
 The CaseHome root resource remains:
 
@@ -31,12 +43,25 @@ The CaseHome root resource remains:
 <casehome>/root.yaml
 ```
 
+Therefore, from the surrounding CaseFolder, the same resource is:
+
+```text
+<case-folder>/casegraph/root.yaml
+```
+
+Machine-local registration maps the canonical public case ID to the canonical
+absolute path of that `root.yaml`, not merely to the CaseFolder or CaseHome
+directory. Reading the registered file validates both the selected CaseHome
+and its root resource without guessing a filename.
+
 Every other node or edge is a resource folder named only by its globally unique
 ID:
 
 ```text
 <casehome>/
   root.yaml
+  config.yaml
+  casegraph.lock.yaml  # when dependencies have been resolved
   <resource-uid>/
     root.yaml
     files/
@@ -47,6 +72,11 @@ ID:
 resource-owned paths require a concrete resource contract. CaseGraph does not
 create `nodes/`, `edges/`, or kind-specific storage trees. The `kind` inside the
 strict ADR 0009 envelope identifies the resource kind.
+
+`config.yaml` is portable CaseHome configuration rather than a graph resource,
+as defined by ADR 0016. `casegraph.lock.yaml` records deterministic dependency
+resolution. Neither file changes the authority of `root.yaml` as the CaseHome
+root resource.
 
 For every non-root graph resource:
 
@@ -71,6 +101,7 @@ This ADR does not define:
 
 - the ID generation algorithm
 - a human-readable alias system
+- the complete machine-local registration schema
 - resource-kind schemas
 - the filenames owned by a document or docket entry
 - automatic recursive discovery of resource folders
@@ -85,3 +116,7 @@ record and related files without introducing type-separated storage.
 
 Existing flat node files and case-local IDs are not the target architecture.
 Their migration requires a separate OpenSpec change and test-backed command.
+
+Keeping the CaseHome repository inside the broader CaseFolder lets the graph be
+cloned, reviewed, and versioned without implicitly placing all surrounding case
+material in the same Git repository.
