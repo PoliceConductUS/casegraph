@@ -268,24 +268,55 @@ describe("exact CaseHome candidate inspection", () => {
       configHome: symlinkConfig,
     });
 
-    expect(fileReport.classification).toBe("conflict");
-    expect(fileReport.diagnostics[0]).toContain("non-directory file");
-    expect(fileReport.resource.state).toBe("not-inspected");
-    expect(fileReport.repository.state).toBe("not-inspected");
-    expect(fileReport.registration.state).toBe("different");
-    expect(fileReport.recovery.paths).toEqual([
-      await realpath(fileFolder),
-      path.join(await realpath(fileFolder), "casegraph"),
-    ]);
-    expect(symlinkReport.classification).toBe("conflict");
-    expect(symlinkReport.diagnostics[0]).toContain("symbolic link");
-    expect(symlinkReport.resource.state).toBe("not-inspected");
-    expect(symlinkReport.repository.state).toBe("not-inspected");
-    expect(symlinkReport.registration.state).toBe("different");
-    expect(symlinkReport.recovery.paths).toEqual([
-      await realpath(symlinkFolder),
-      path.join(await realpath(symlinkFolder), "casegraph"),
-    ]);
+    for (const [report, caseFolder, kind] of [
+      [fileReport, fileFolder, "non-directory file"],
+      [symlinkReport, symlinkFolder, "symbolic link"],
+    ] as const) {
+      const canonicalFolder = await realpath(caseFolder);
+      const caseHome = path.join(canonicalFolder, "casegraph");
+      const root = path.join(caseHome, "root.yaml");
+      const identityDiagnostic = `Exact CaseHome child ${caseHome} is a ${kind}`;
+      const resourceDiagnostic = `Strict CaseHome resources were not inspected because ${identityDiagnostic}`;
+      const repositoryDiagnostic = `Repository was not inspected because ${identityDiagnostic}`;
+      const readinessReasons = [
+        identityDiagnostic,
+        "case ID is already registered to a different root",
+      ];
+
+      expect(report).toEqual({
+        classification: "conflict",
+        paths: { caseFolder: canonicalFolder, caseHome, root },
+        resource: { state: "not-inspected", diagnostic: resourceDiagnostic },
+        repository: {
+          state: "not-inspected",
+          diagnostic: repositoryDiagnostic,
+        },
+        registration: {
+          state: "different",
+          registeredRoot: await realpath(registered.rootPath),
+        },
+        structuralPushTarget: {
+          ready: false,
+          pushUrls: [],
+          provesWritability: false,
+        },
+        registrationEligibility: {
+          eligible: false,
+          reasons: readinessReasons,
+        },
+        mutationReadiness: { ready: false, reasons: readinessReasons },
+        diagnostics: [
+          identityDiagnostic,
+          resourceDiagnostic,
+          repositoryDiagnostic,
+        ],
+        recovery: {
+          paths: [canonicalFolder, caseHome],
+          remotes: [],
+          registration: "different",
+        },
+      });
+    }
     expect(JSON.stringify(symlinkReport)).not.toContain(
       "SECRET MUST NOT BE READ",
     );
@@ -719,89 +750,188 @@ describe("ineligible and invalid candidates", () => {
     ]);
   });
 
-  test("reports safe resource, registration, and recovery state when Git is unavailable", async () => {
-    const fixture = await createCaseHome({ root: strictCaseRoot() });
-    await writeFile(
-      path.join(fixture.configHome, "casehomes.yaml"),
-      `PoliceConductUS/no-git: ${await realpath(fixture.rootPath)}\n`,
-    );
-    const observed: { args: readonly string[]; cwd: string }[] = [];
-    const unavailable: GitRunner = (args, cwd) => {
-      observed.push({ args: [...args], cwd });
-      return Promise.resolve({
-        exitCode: 1,
-        stderr: "spawn git ENOENT",
-        stdout: "",
+  test.each([
+    ["valid-current", "valid", "current"],
+    ["valid-different", "valid", "different"],
+    ["valid-conflicting-root", "valid", "conflicting-root"],
+    ["invalid-invalid", "invalid", "invalid"],
+    ["absent-absent", "absent", "absent"],
+  ] as const)(
+    "reports complete %s state when Git is unavailable",
+    async (scenario, resourceState, registrationState) => {
+      const memberUid = "y2xv0j9f4p7m3n8q6r5s1t2u";
+      const fixture = await createCaseHome({
+        root:
+          resourceState === "valid"
+            ? strictCaseRoot([memberUid])
+            : resourceState === "invalid"
+              ? "malformed: [\n"
+              : undefined,
       });
-    };
+      const caseId = `PoliceConductUS/${scenario}`;
+      const memberPath = path.join(fixture.caseHome, memberUid, "root.yaml");
+      if (resourceState === "valid") {
+        await mkdir(path.dirname(memberPath), { recursive: true });
+        await writeFile(memberPath, strictCaseRoot([], memberUid));
+      }
+      const other = await createCaseHome({ root: strictCaseRoot() });
+      const registrationPath = path.join(fixture.configHome, "casehomes.yaml");
+      if (registrationState === "current") {
+        await writeFile(
+          registrationPath,
+          `${caseId}: ${await realpath(fixture.rootPath)}\n`,
+        );
+      } else if (registrationState === "different") {
+        await writeFile(
+          registrationPath,
+          `${caseId}: ${await realpath(other.rootPath)}\n`,
+        );
+      } else if (registrationState === "conflicting-root") {
+        await writeFile(
+          registrationPath,
+          `PoliceConductUS/existing: ${await realpath(fixture.rootPath)}\n`,
+        );
+      } else if (registrationState === "invalid") {
+        await writeFile(registrationPath, "malformed: [\n");
+      }
+      const observed: { args: readonly string[]; cwd: string }[] = [];
+      const unavailable: GitRunner = (args, cwd) => {
+        observed.push({ args: [...args], cwd });
+        return Promise.resolve({
+          exitCode: 1,
+          stderr: "spawn git ENOENT",
+          stdout: "",
+        });
+      };
 
-    const report = await inspectGitBackedCaseHome(
-      {
-        caseFolder: fixture.caseFolder,
-        caseId: "PoliceConductUS/no-git",
-        configHome: fixture.configHome,
-      },
-      { git: unavailable },
-    );
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder: fixture.caseFolder,
+          caseId,
+          configHome: fixture.configHome,
+          selectedRemote: "origin",
+        },
+        { git: unavailable },
+      );
 
-    expect(report.classification).toBe("unavailable");
-    expect(report.resource).toEqual({ state: "valid", count: 1 });
-    expect(report.registration).toEqual({
-      state: "current",
-      registeredRoot: await realpath(fixture.rootPath),
-    });
-    expect(report.recovery).toMatchObject({
-      paths: [
-        await realpath(fixture.caseFolder),
-        await realpath(fixture.caseHome),
-        await realpath(fixture.rootPath),
-      ],
-      resourceCount: 1,
-      remotes: [],
-      registration: "current",
-    });
-    expect(report.diagnostics.join("\n")).toContain("Git is unavailable");
-    expect(observed).toEqual([
-      { args: ["--no-optional-locks", "--version"], cwd: process.cwd() },
-    ]);
-  });
+      const canonicalFolder = await realpath(fixture.caseFolder);
+      const canonicalHome = await realpath(fixture.caseHome);
+      const canonicalRoot = path.join(canonicalHome, "root.yaml");
+      const gitDiagnostic = "Git is unavailable: spawn git ENOENT";
+      const resourceReasons =
+        resourceState === "valid"
+          ? []
+          : ["strict CaseHome resources are invalid"];
+      const registrationReasons =
+        registrationState === "different"
+          ? ["case ID is already registered to a different root"]
+          : registrationState === "conflicting-root"
+            ? ["CaseHome root is already registered to a different case ID"]
+            : registrationState === "invalid"
+              ? ["machine registration is invalid"]
+              : [];
 
-  test("includes observed resource and registry failures when Git is unavailable", async () => {
-    const fixture = await createCaseHome({ root: "malformed: [\n" });
-    await writeFile(
-      path.join(fixture.configHome, "casehomes.yaml"),
-      "malformed: [\n",
-    );
-    const unavailable: GitRunner = () =>
-      Promise.resolve({
-        exitCode: 1,
-        stderr: "spawn git ENOENT",
-        stdout: "",
+      expect(report.classification).toBe("unavailable");
+      expect(report.paths).toEqual({
+        caseFolder: canonicalFolder,
+        caseHome: canonicalHome,
+        root: canonicalRoot,
       });
-
-    const report = await inspectGitBackedCaseHome(
-      {
-        caseFolder: fixture.caseFolder,
-        caseId: "PoliceConductUS/no-git-invalid",
-        configHome: fixture.configHome,
-      },
-      { git: unavailable },
-    );
-
-    expect(report.resource.state).toBe("invalid");
-    expect(report.registration.state).toBe("invalid");
-    expect(report.registrationEligibility.reasons).toEqual([
-      "Git is unavailable",
-      "strict CaseHome resources are invalid",
-      "machine registration is invalid",
-    ]);
-    expect(report.mutationReadiness.reasons).toEqual([
-      "Git is unavailable",
-      "strict CaseHome resources are invalid",
-    ]);
-    expect(report.diagnostics.join("\n")).toContain(fixture.rootPath);
-    expect(report.diagnostics.join("\n")).toContain("casehomes.yaml");
-  });
+      expect(report.repository).toEqual({
+        state: "unavailable",
+        diagnostic: gitDiagnostic,
+      });
+      expect(report.resource.state).toBe(resourceState);
+      if (resourceState === "valid")
+        expect(report.resource).toEqual({ state: "valid", count: 2 });
+      if (resourceState === "invalid") {
+        expect(report.resource).toMatchObject({ state: "invalid" });
+        expect(Object.keys(report.resource).sort()).toEqual([
+          "diagnostic",
+          "state",
+        ]);
+        if (report.resource.state === "invalid")
+          expect(report.resource.diagnostic).toContain(canonicalRoot);
+      }
+      if (resourceState === "absent")
+        expect(report.resource).toEqual({ state: "absent" });
+      expect(report.registration.state).toBe(registrationState);
+      if (registrationState === "current")
+        expect(report.registration).toEqual({
+          state: "current",
+          registeredRoot: canonicalRoot,
+        });
+      if (registrationState === "different")
+        expect(report.registration).toEqual({
+          state: "different",
+          registeredRoot: await realpath(other.rootPath),
+        });
+      if (registrationState === "conflicting-root")
+        expect(report.registration).toEqual({
+          state: "conflicting-root",
+          registeredCaseId: "PoliceConductUS/existing",
+          registeredRoot: canonicalRoot,
+        });
+      if (registrationState === "invalid") {
+        expect(report.registration).toMatchObject({ state: "invalid" });
+        expect(Object.keys(report.registration).sort()).toEqual([
+          "diagnostic",
+          "state",
+        ]);
+        if (report.registration.state === "invalid")
+          expect(report.registration.diagnostic).toContain(registrationPath);
+      }
+      if (registrationState === "absent")
+        expect(report.registration).toEqual({ state: "absent" });
+      expect(report.structuralPushTarget).toEqual({
+        ready: false,
+        remote: "origin",
+        pushUrls: [],
+        provesWritability: false,
+      });
+      expect(report.registrationEligibility).toEqual({
+        eligible: false,
+        reasons: [
+          "Git is unavailable",
+          ...resourceReasons,
+          ...registrationReasons,
+        ],
+      });
+      expect(report.mutationReadiness).toEqual({
+        ready: false,
+        reasons: ["Git is unavailable", ...resourceReasons],
+      });
+      expect(report.diagnostics).toHaveLength(
+        1 +
+          (resourceState === "invalid" ? 1 : 0) +
+          (registrationState === "invalid" ? 1 : 0),
+      );
+      expect(report.diagnostics).toContain(gitDiagnostic);
+      if (resourceState === "invalid")
+        expect(report.diagnostics.join("\n")).toContain(canonicalRoot);
+      if (registrationState === "invalid")
+        expect(report.diagnostics.join("\n")).toContain(registrationPath);
+      expect(report.recovery).toEqual({
+        paths:
+          resourceState === "valid"
+            ? [
+                canonicalFolder,
+                canonicalHome,
+                ...[canonicalRoot, await realpath(memberPath)].sort(),
+              ]
+            : resourceState === "invalid"
+              ? [canonicalFolder, canonicalHome, canonicalRoot]
+              : [canonicalFolder, canonicalHome],
+        resourceCount: resourceState === "valid" ? 2 : undefined,
+        commit: undefined,
+        remotes: [],
+        registration: registrationState,
+      });
+      expect(observed).toEqual([
+        { args: ["--no-optional-locks", "--version"], cwd: process.cwd() },
+      ]);
+    },
+  );
 
   test("ignores and preserves malformed portable config and arbitrary lock bytes", async () => {
     const fixture = await createCaseHome({ commit: true });
