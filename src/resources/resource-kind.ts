@@ -13,12 +13,40 @@ export interface CaseGraphResource {
   readonly status?: object;
 }
 
-export interface ResourceKindDefinition {
+export type ResourceCategory = "node" | "legal-effect-edge";
+
+export interface ResourceInspection<
+  Resource extends CaseGraphResource = CaseGraphResource,
+> {
+  readonly resource: Resource;
+  readonly category: ResourceCategory;
+  readonly resourceReferences: readonly ResourceUid[];
+  readonly ownedPaths: readonly string[];
+}
+
+export interface ResourceKindDefinition<
+  Resource extends CaseGraphResource = CaseGraphResource,
+> {
   readonly apiVersion: typeof CASEGRAPH_RESOURCE_API_VERSION;
   readonly kind: string;
-  read(value: unknown): CaseGraphResource;
+  readonly category: ResourceCategory;
+  read(value: unknown): Resource;
+  inspect(value: unknown): ResourceInspection<Resource>;
   serialize(value: unknown): string;
 }
+
+type DefinedResource<
+  Kind extends string,
+  SpecShape extends z.ZodRawShape,
+  StatusShape extends z.ZodRawShape | undefined,
+> = {
+  readonly apiVersion: typeof CASEGRAPH_RESOURCE_API_VERSION;
+  readonly kind: Kind;
+  readonly metadata: { readonly uid: ResourceUid };
+  readonly spec: z.output<z.ZodObject<SpecShape>>;
+} & (StatusShape extends z.ZodRawShape
+  ? { readonly status: z.output<z.ZodObject<StatusShape>> }
+  : object);
 
 interface DefineResourceKindOptions<
   Kind extends string,
@@ -26,8 +54,15 @@ interface DefineResourceKindOptions<
   StatusShape extends z.ZodRawShape | undefined,
 > {
   readonly kind: Kind;
+  readonly category: ResourceCategory;
   readonly spec: SpecShape;
   readonly status?: StatusShape;
+  readonly resourceReferences?: (
+    resource: DefinedResource<Kind, SpecShape, StatusShape>,
+  ) => readonly ResourceUid[];
+  readonly ownedPaths?: (
+    resource: DefinedResource<Kind, SpecShape, StatusShape>,
+  ) => readonly string[];
 }
 
 export function defineResourceKind<
@@ -36,7 +71,7 @@ export function defineResourceKind<
   StatusShape extends z.ZodRawShape | undefined = undefined,
 >(
   options: DefineResourceKindOptions<Kind, SpecShape, StatusShape>,
-): ResourceKindDefinition {
+): ResourceKindDefinition<DefinedResource<Kind, SpecShape, StatusShape>> {
   const metadataSchema = z.strictObject({ uid: ResourceUidSchema });
   const specSchema = z.strictObject(options.spec);
   const resourceSchema =
@@ -55,14 +90,28 @@ export function defineResourceKind<
           status: z.strictObject(options.status),
         });
 
-  function read(value: unknown): CaseGraphResource {
-    return resourceSchema.parse(value);
+  function read(value: unknown): DefinedResource<Kind, SpecShape, StatusShape> {
+    return resourceSchema.parse(value) as DefinedResource<
+      Kind,
+      SpecShape,
+      StatusShape
+    >;
   }
 
   return {
     apiVersion: CASEGRAPH_RESOURCE_API_VERSION,
     kind: options.kind,
+    category: options.category,
     read,
+    inspect(value: unknown) {
+      const resource = read(value);
+      return {
+        resource,
+        category: options.category,
+        resourceReferences: options.resourceReferences?.(resource) ?? [],
+        ownedPaths: options.ownedPaths?.(resource) ?? [],
+      };
+    },
     serialize(value: unknown): string {
       return stringify(read(value));
     },
@@ -71,6 +120,7 @@ export function defineResourceKind<
 
 export interface ResourceRegistry {
   read(value: unknown, resourcePath: string): CaseGraphResource;
+  inspect(value: unknown, resourcePath: string): ResourceInspection;
   serialize(value: unknown, resourcePath: string): string;
 }
 
@@ -141,6 +191,16 @@ export function createResourceRegistry(
 
   return {
     read,
+    inspect(value: unknown, resourcePath: string): ResourceInspection {
+      const definition = select(value, resourcePath);
+      try {
+        return definition.inspect(value);
+      } catch (error) {
+        throw new Error(`Invalid CaseGraph resource at ${resourcePath}`, {
+          cause: error,
+        });
+      }
+    },
     serialize(value: unknown, resourcePath: string): string {
       const definition = select(value, resourcePath);
       try {

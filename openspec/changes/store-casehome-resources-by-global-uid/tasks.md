@@ -1,9 +1,9 @@
 ## 1. Kind Storage Semantics And Case Membership
 
-- [ ] 1.1 Add focused failing tests for `Case.spec.resources`, strict unknown
+- [x] 1.1 Add focused failing tests for `Case.spec.resources`, strict unknown
       fields, node/legal-effect-edge categories, and typed reference and
       owned-path selectors.
-- [ ] 1.2 Extend resource kind definitions and the production `Case` contract
+- [x] 1.2 Extend resource kind definitions and the production `Case` contract
       with the smallest typed storage semantics, then make the focused tests
       pass.
 

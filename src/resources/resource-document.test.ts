@@ -11,14 +11,15 @@ const validCase = {
   apiVersion: "casegraph.policeconduct.org/v1alpha1",
   kind: "Case",
   metadata: { uid: "tz4a98xxat96iws9zmbrgj3a" },
-  spec: {},
+  spec: { resources: [] },
 } as const;
 
 const validCaseYaml = `apiVersion: casegraph.policeconduct.org/v1alpha1
 kind: Case
 metadata:
   uid: tz4a98xxat96iws9zmbrgj3a
-spec: {}
+spec:
+  resources: []
 `;
 
 async function temporaryDirectory(): Promise<string> {
