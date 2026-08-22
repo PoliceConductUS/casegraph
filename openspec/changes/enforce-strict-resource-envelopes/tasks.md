@@ -1,9 +1,9 @@
 ## 1. Global Resource Identity
 
-- [ ] 1.1 Add focused failing tests for valid and invalid CUID2 resource UIDs,
+- [x] 1.1 Add focused failing tests for valid and invalid CUID2 resource UIDs,
       UID-only references, composite-reference rejection, and duplicate UIDs across
       kinds.
-- [ ] 1.2 Implement the shared resource UID/reference schema and cross-kind
+- [x] 1.2 Implement the shared resource UID/reference schema and cross-kind
       uniqueness validator, then make the focused tests pass.
 
 ## 2. Strict Kind Definitions And Dispatch
