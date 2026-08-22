@@ -7,6 +7,10 @@ Accepted.
 ADR 0009 resolves the previously open initial API-version and strict-envelope
 decisions for CaseGraph resources.
 
+Expanded by [ADR 0016](0016-scoped-package-identity-and-dependencies.md),
+which defines how portable references select a package before resolving an
+artifact path relative to that package root.
+
 ## Context
 
 Case material often arrives as existing folders containing PDFs, Markdown,
@@ -102,7 +106,7 @@ Full extracted text belongs in a separate derived file such as `ruling.md`, not
 inside the sidecar YAML.
 
 Provenance and derivation are typed properties rather than legal-effect graph
-edges under ADR 0004.
+edges under ADR 0013.
 
 ### Support progressive indexing
 
@@ -132,7 +136,7 @@ Case-specific connections live in the workspace-home package. Those include:
 - material similarities and differences between this case and an authority
 - qualified-immunity and fair-warning applications
 - legal-effect edges
-- filing-version uses and strategy decisions
+- filing-packet uses and strategy decisions
 
 This separation allows multiple cases to reuse one source or authority package
 without mixing their legal applications.
@@ -142,7 +146,7 @@ without mixing their legal applications.
 Authored Markdown may eventually associate visible text with a stable,
 non-visible CaseGraph reference. The reference should resolve to a case-specific
 record that can identify the source artifact, exact fragment, fact or authority
-proposition, legal-effect connection, and filing snapshot supporting the span.
+proposition, legal-effect connection, and filing packet supporting the span.
 
 The source document remains readable without displaying the CaseGraph metadata.
 One reusable proposition or source fragment may support multiple document spans

@@ -4,6 +4,11 @@
 
 Accepted.
 
+Expanded by [ADR 0016](0016-scoped-package-identity-and-dependencies.md),
+which defines package identity, versioning, dependency declarations, and
+portable cross-package references. This ADR remains authoritative for package
+folder boundaries and canonical entry points.
+
 ## Context
 
 CaseGraph stores related case material in folders. A folder may represent a
@@ -51,7 +56,7 @@ contract must identify it as one.
 
 ## Non-Decisions
 
-This ADR does not define:
+At the time of this decision, this ADR did not define:
 
 - one schema shared by every `root.yaml`
 - a required package-type field
@@ -63,7 +68,9 @@ This ADR does not define:
 - logical package reference syntax
 - database or non-filesystem package storage
 
-Those decisions should be made only when a concrete package needs them.
+ADR 0016 now defines package identity and logical package-reference syntax.
+The other listed matters remain undecided unless another accepted ADR or
+OpenSpec requirement addresses them.
 
 ## Consequences
 
