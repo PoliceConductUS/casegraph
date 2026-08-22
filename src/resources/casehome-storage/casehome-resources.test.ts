@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -219,6 +219,101 @@ spec: {}
     );
   });
 
+  test("rejects a missing referenced resource with its UID and canonical path", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const expectedPath = join(caseHomePath, nodeAUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `Missing CaseHome resource ${nodeAUid} at ${expectedPath}`,
+    );
+  });
+
+  test("rejects a canonical UID folder whose envelope claims another UID", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourcePath = join(caseHomePath, nodeAUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(caseHomePath, nodeAUid, testNode(nodeBUid));
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `CaseHome resource UID mismatch at ${resourcePath}: expected ${nodeAUid}, actual ${nodeBUid}`,
+    );
+  });
+
+  test("rejects a second authoritative document claiming the Case root UID", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const duplicatePath = join(caseHomePath, caseUid, "root.yaml");
+    const unreferencedPath = join(caseHomePath, unreferencedUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([]));
+    await writeNonRoot(caseHomePath, caseUid, caseResource([]));
+    await mkdir(dirname(unreferencedPath), { recursive: true });
+    await writeFile(unreferencedPath, "metadata: [\n");
+    const observed = observeRegistryReads(registry);
+
+    await expect(
+      openCaseHomeResources(caseHomePath, observed.registry),
+    ).rejects.toThrow(
+      `Duplicate authoritative CaseHome resource UID ${caseUid} at ${duplicatePath}`,
+    );
+    expect(observed.inspectionCount(duplicatePath)).toBe(1);
+    expect(observed.inspectionCount(unreferencedPath)).toBe(0);
+  });
+
+  test("rejects malformed YAML in a referenced canonical resource", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourcePath = join(caseHomePath, nodeAUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await mkdir(dirname(resourcePath), { recursive: true });
+    await writeFile(resourcePath, "metadata: [\n");
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `Invalid CaseGraph resource YAML at ${resourcePath}:`,
+    );
+  });
+
+  test("rejects an unknown kind in a referenced canonical resource", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourcePath = join(caseHomePath, nodeAUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await mkdir(dirname(resourcePath), { recursive: true });
+    await writeFile(
+      resourcePath,
+      `apiVersion: casegraph.policeconduct.org/v1alpha1
+kind: Unknown
+metadata:
+  uid: ${nodeAUid}
+spec: {}
+`,
+    );
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `Unknown CaseGraph resource kind Unknown at ${resourcePath}`,
+    );
+  });
+
+  test("rejects a strict-schema failure in a referenced canonical resource", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourcePath = join(caseHomePath, nodeAUid, "root.yaml");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await mkdir(dirname(resourcePath), { recursive: true });
+    await writeFile(
+      resourcePath,
+      `apiVersion: casegraph.policeconduct.org/v1alpha1
+kind: TestNode
+metadata:
+  uid: ${nodeAUid}
+spec:
+  references: []
+  ownedPaths: []
+  invented: true
+`,
+    );
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `Invalid CaseGraph resource at ${resourcePath}`,
+    );
+  });
+
   test("resolves a legal-effect edge through the same UID-only boundary", async () => {
     const caseHomePath = await createTemporaryCaseHome();
     const edge = testLegalEffectEdge(edgeUid, caseUid, caseUid);
@@ -245,6 +340,108 @@ spec: {}
     expect(snapshot.count).toBe(3);
     expect(snapshot.resolve(nodeAUid).resource.metadata.uid).toBe(nodeAUid);
     expect(snapshot.resolve(nodeBUid).resource.metadata.uid).toBe(nodeBUid);
+  });
+
+  test("normalizes typed files and audits paths inside the canonical resource folder", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourceFolder = join(caseHomePath, nodeAUid);
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      nodeAUid,
+      testNode(nodeAUid, [], ["files/source.pdf", "audits/review.yaml"]),
+    );
+
+    const snapshot = await openCaseHomeResources(caseHomePath, registry);
+
+    expect(snapshot.resolve(nodeAUid).ownedPaths).toEqual([
+      join(resourceFolder, "files", "source.pdf"),
+      join(resourceFolder, "audits", "review.yaml"),
+    ]);
+  });
+
+  test("ignores a physical file that no typed owned-path selector declares", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const undeclaredPath = join(
+      caseHomePath,
+      nodeAUid,
+      "files",
+      "undeclared.pdf",
+    );
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(caseHomePath, nodeAUid, testNode(nodeAUid));
+    await mkdir(dirname(undeclaredPath), { recursive: true });
+    await writeFile(undeclaredPath, "not declared");
+
+    const snapshot = await openCaseHomeResources(caseHomePath, registry);
+
+    expect(snapshot.resolve(nodeAUid).ownedPaths).toEqual([]);
+  });
+
+  test.each([
+    ["empty", ""],
+    ["absolute", "/files/source.pdf"],
+    ["leading parent segment", "../outside.pdf"],
+    ["nested parent segment", "files/nested/../source.pdf"],
+    ["bare files directory", "files"],
+    ["files directory with trailing separator", "files/"],
+    ["normalized bare files directory", "files/."],
+    ["bare audits directory", "audits"],
+    ["outside the owned subtrees", "notes/source.pdf"],
+  ])(
+    "rejects an %s owned path without returning a snapshot",
+    async (_case, ownedPath) => {
+      const caseHomePath = await createTemporaryCaseHome();
+      const resourcePath = join(caseHomePath, nodeAUid, "root.yaml");
+      await writeRoot(caseHomePath, caseResource([nodeAUid]));
+      await writeNonRoot(
+        caseHomePath,
+        nodeAUid,
+        testNode(nodeAUid, [], [ownedPath]),
+      );
+
+      await expect(
+        openCaseHomeResources(caseHomePath, registry),
+      ).rejects.toThrow(
+        `Invalid owned path ${JSON.stringify(ownedPath)} for resource ${nodeAUid} at ${resourcePath}`,
+      );
+    },
+  );
+
+  test("rejects an existing symlink segment that escapes the resource folder", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourceFolder = join(caseHomePath, nodeAUid);
+    const outsidePath = await mkdtemp(join(tmpdir(), "casegraph-outside-"));
+    temporaryCaseHomes.push(outsidePath);
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      nodeAUid,
+      testNode(nodeAUid, [], ["files/escape/source.pdf"]),
+    );
+    await mkdir(join(resourceFolder, "files"));
+    await symlink(outsidePath, join(resourceFolder, "files", "escape"));
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `Owned path escapes resource ${nodeAUid} at ${join(resourceFolder, "files", "escape", "source.pdf")}`,
+    );
+  });
+
+  test("accepts a missing owned-path suffix after contained existing ancestors", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourceFolder = join(caseHomePath, nodeAUid);
+    const ownedPath = join(resourceFolder, "files", "missing", "source.pdf");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      nodeAUid,
+      testNode(nodeAUid, [], ["files/missing/source.pdf"]),
+    );
+    await mkdir(join(resourceFolder, "files"));
+
+    const snapshot = await openCaseHomeResources(caseHomePath, registry);
+
+    expect(snapshot.resolve(nodeAUid).ownedPaths).toEqual([ownedPath]);
   });
 
   test("records repeated references as one canonical member", async () => {

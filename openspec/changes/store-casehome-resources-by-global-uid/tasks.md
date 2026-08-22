@@ -17,10 +17,10 @@
 
 ## 3. Storage Rejection And Owned Paths
 
-- [ ] 3.1 Add focused failing tests for typed `files/` and `audits/` paths,
+- [x] 3.1 Add focused failing tests for typed `files/` and `audits/` paths,
       undeclared files, missing resources, folder/UID mismatches, duplicate root
       UIDs, invalid envelopes, and every owned-path escape form.
-- [ ] 3.2 Implement canonical storage diagnostics and owned-path containment,
+- [x] 3.2 Implement canonical storage diagnostics and owned-path containment,
       then make the focused rejection tests pass.
 
 ## 4. Change Verification
