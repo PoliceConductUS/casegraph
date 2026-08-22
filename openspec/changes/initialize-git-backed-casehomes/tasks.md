@@ -15,12 +15,12 @@
 
 ## 2. Read-Only Primary Repository Inspection
 
-- [ ] 2.1 Add focused failing tests for exact CaseFolder/CaseHome derivation,
+- [x] 2.1 Add focused failing tests for exact CaseFolder/CaseHome derivation,
       strict rooted resource loading, Git root/common-dir/branch/state/remotes,
       registration and recovery reports, symlinks, inherited non-primary roots,
       bare repos, every `.git`-file checkout, CLI/import boundaries, and byte/ref
       immutability.
-- [ ] 2.2 Implement exact read-only repository inspection through injectable
+- [x] 2.2 Implement exact read-only repository inspection through injectable
       Git and registration boundaries, then make the focused tests pass.
 
 ## 3. Local CaseHome Preparation
