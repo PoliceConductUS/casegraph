@@ -30,7 +30,12 @@ Machine registration is one strict YAML mapping at
 the canonical real absolute path ending in `/casegraph/root.yaml`. An identical
 registration is a no-op, a different path conflicts, a root already owned by a
 different canonical ID conflicts, and a changed mapping is published atomically
-only after the complete next document validates.
+only after the complete next document validates. Each mutation acquires an
+exclusive ephemeral sibling guard before reading the current mapping and holds
+it through publication, so concurrent processes cannot publish from the same
+stale snapshot. Contention fails visibly without retry. Registry entries and
+canonical root targets must be regular files; a new registry is mode `0600`,
+while replacement preserves the existing registry's permission bits.
 
 ## Alternatives Considered
 
@@ -108,8 +113,9 @@ workflow.
   creates nor validates it; Issues #29 and #53 own that envelope and fail-early
   loading behavior.
 - `casehomes.yaml` is the machine registration owned by this change; the
-  no-configuration boundary applies only to portable config, locks, and
-  provider/remote configuration.
+  no-configuration boundary applies only to portable `config.yaml`, portable
+  `casegraph.lock.yaml`, and provider/remote configuration, not the ephemeral
+  machine-registration guard.
 
 ## Open Questions
 

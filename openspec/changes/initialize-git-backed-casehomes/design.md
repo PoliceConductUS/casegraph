@@ -119,8 +119,9 @@ empty-membership root through `writeResourceDocument`; both modes reopen through
 separate failure boundary: Git probe, Git initialization, root write, and strict
 reopen. The result inventories only states that actually exist and never reports
 a later step as successful. Preparation creates no commit, remote, registration,
-portable `config.yaml`, lock, alias, default, or worktree. Existing malformed
-`config.yaml` and any existing lock are ignored and byte-preserved.
+portable `config.yaml`, portable `casegraph.lock.yaml`, alias, default, or
+worktree. Existing malformed `config.yaml` and any existing portable lock are
+ignored and byte-preserved.
 
 ### Finalize by commit, immediate push, revalidation, registration
 
@@ -153,16 +154,36 @@ for a later CaseGraph mutation even though registration itself succeeds.
 Registration stores a direct YAML mapping in
 `<config-home>/casehomes.yaml`. Both reading and writing reject malformed YAML,
 non-mapping roots, non-string keys or values, duplicate keys, and stored paths
-that are not absolute `casegraph/root.yaml` paths. The boundary accepts the
+that are not absolute `casegraph/root.yaml` paths. The boundary uses `lstat` on
+the registry directory entry before reading it: only a genuinely absent entry is
+an empty registry, and a valid or dangling symlink, directory, or any other
+non-regular entry is rejected unchanged. The boundary accepts the
 caller-validated canonical case ID without adding a second identity policy. A
-new target root is resolved through `realpath` before comparison and storage.
+new target root is resolved through `realpath` before comparison and storage,
+and its canonical target must be a regular file rather than a directory or
+device.
 
-Registration validates the complete next mapping, writes a sibling temporary
-file with exclusive creation, and atomically renames it over the destination.
-An identical ID/path pair performs no write. A different path for the same ID
-fails before any write. The inverse is also unique: a root already mapped from
-one canonical ID cannot be mapped from a second canonical ID. No alias or
-default is inferred.
+Every mutation creates the exclusive sibling guard
+`<config-home>/casehomes.yaml.lock` before it reads the current registry, then
+holds that guard while it validates the snapshot, constructs and validates the
+complete next mapping, writes a sibling temporary file with exclusive creation,
+and atomically renames the temporary file over the destination. A contender
+fails visibly on the held guard without reading a stale snapshot, publishing,
+reporting `"created"`, retrying, or falling back. A later caller may invoke a
+new operation after the guard is released; that operation rereads the published
+mapping. A newly created registry has permission mode `0600`. Replacement uses
+the permission bits captured from the existing regular registry entry.
+
+The holder removes its guard after normal completion and after an error. If
+guard cleanup itself fails, the operation reports that failure and the retained
+guard path rather than deleting, retrying, or claiming clean completion. The
+report also preserves whether registry publication already occurred. The
+existing exclusive sibling temporary write and atomic rename remain unchanged;
+there is no retry. An identical ID/path pair performs no registry write, but its
+read and no-op decision still occur while holding the guard. A different path
+for the same ID fails before publication. The inverse is also unique: a root
+already mapped from one canonical ID cannot be mapped from a second canonical
+ID. No alias or default is inferred.
 
 ### Keep the legacy transition explicit and temporary
 

@@ -30,6 +30,11 @@ registration rules.
   changing the existing file.
 - Reject the inverse conflict when another canonical ID already owns the same
   canonical root path.
+- Serialize each mutation's read, validation, sibling publication, and cleanup
+  with one exclusive ephemeral sibling guard; report contention without retry.
+- Reject non-regular registry entries and canonical root targets, create a new
+  registry with mode `0600`, and preserve existing permission bits on
+  replacement.
 
 **Architecture transition**
 

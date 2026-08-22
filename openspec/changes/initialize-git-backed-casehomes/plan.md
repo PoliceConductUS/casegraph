@@ -60,8 +60,11 @@ YAML, Zod, Vitest, OpenSpec.
   non-string keys or values, missing targets, non-real/symlinked stored paths,
   values that are not absolute paths ending in `casegraph/root.yaml`, and an
   existing mapping that assigns one real root to multiple IDs. Assert every
-  diagnostic identifies
-  `<config-home>/casehomes.yaml`.
+  diagnostic identifies `<config-home>/casehomes.yaml`. Prove absence means
+  `lstat` found no directory entry; valid and dangling symlinks, directories,
+  and another non-regular entry at that exact path are rejected unchanged rather
+  than treated as absent. Prove each canonical stored root target is a regular
+  file and reject a directory, device, or other non-regular target.
 
 - [ ] **Step 2: Run registration tests and record RED**
 
@@ -73,9 +76,12 @@ YAML, Zod, Vitest, OpenSpec.
 
 - [ ] **Step 3: Implement read-only strict registration loading**
 
-  Parse with YAML's document API so duplicate-key diagnostics are retained.
-  Accept only a direct string-to-string mapping, freeze a copied result, and do
-  not inspect aliases or defaults because they are outside this schema.
+  `lstat` the registry directory entry before reading, treating only a genuinely
+  absent entry as empty and accepting only a regular file. Parse with YAML's
+  document API so duplicate-key diagnostics are retained. Accept only a direct
+  string-to-string mapping, freeze a copied result, and do not inspect aliases
+  or defaults because they are outside this schema. Resolve and classify every
+  stored canonical root target and require a regular file.
 
 - [ ] **Step 4: Add failing atomic registration tests**
 
@@ -85,30 +91,63 @@ YAML, Zod, Vitest, OpenSpec.
   write for an identical registration, rejects a different path for one ID, and
   rejects a second ID for one already-mapped root. Assert both conflict
   diagnostics identify the existing/requested ID and path and leave the old
-  bytes unchanged. Inject a sibling-file publisher that fails before rename and
-  prove the destination bytes remain unchanged.
+  bytes unchanged. Reject requested canonical root targets that are directories,
+  devices, or other non-regular entries. Prove a new registry has POSIX
+  permission bits `0600` even under a permissive process umask, and replace a
+  valid registry with a distinguishable existing mode while proving
+  `stat.mode & 0o777` is preserved. Inject a sibling-file publisher that fails
+  before rename and prove the destination bytes remain unchanged.
 
-- [ ] **Step 5: Run the tests and confirm the new registration cases fail**
+- [ ] **Step 5: Add failing inter-process serialization and cleanup tests**
 
-  Run the Step 2 command. Expected: strict read cases pass and write cases fail
-  because `register` is absent.
+  Use a real shared configuration home and independent process participants.
+  Hold the exclusive sibling `casehomes.yaml.lock` for one writer before its
+  registry read, start a conflicting contender, and prove the contender fails
+  with the guard path and contention state while destination bytes remain
+  unchanged and neither `"created"` nor `"unchanged"` is returned. Assert no
+  retry or fallback publisher invocation. After the holder publishes and
+  releases, start a new non-conflicting operation and prove it rereads the
+  latest mapping and preserves the first entry; two conflicting stale-snapshot
+  writers can never both report `"created"`.
 
-- [ ] **Step 6: Implement exclusive temporary write and atomic rename**
+  Cover guard removal after identical no-op, created publication, validation
+  failure, and pre-rename publisher failure. Inject guard cleanup failure before
+  and after registry publication and prove the diagnostic reports the retained
+  guard path plus whether publication occurred, without speculative deletion or
+  recovery. Prove a contender never removes the holder's guard.
+
+- [ ] **Step 6: Run the tests and confirm the new registration cases fail**
+
+  Run the Step 2 command. Expected: the new entry-type, target-type, permission,
+  serialization, and cleanup cases fail at their named missing behavior while
+  previously covered parser and uniqueness behavior remains green.
+
+- [ ] **Step 7: Implement guarded snapshot transaction and atomic rename**
 
   Accept the already validated `caseId` unchanged, resolve the existing target
-  root to its real absolute path, require the final two path segments to be
-  `casegraph/root.yaml`, reject both ID-to-different-root and
-  root-to-different-ID conflicts, build and validate the complete next mapping,
-  write a uniquely named sibling with `flag: "wx"`, then rename it over the
-  destination. On failure, report the unpublished temporary path without
-  deleting it. Return `"unchanged"` before creating a temporary file for an
-  identical registration.
+  root to its real absolute path, require a regular-file target and the final two
+  path segments `casegraph/root.yaml`, and reject both ID-to-different-root and
+  root-to-different-ID conflicts. Create `casehomes.yaml.lock` exclusively
+  before `lstat` or reading the destination and hold it through validation of
+  the complete next mapping, sibling write, and rename. Fail visibly on
+  contention without retry or fallback. Write a uniquely named sibling with
+  `flag: "wx"`, mode `0600` for a new registry or the existing registry's
+  permission bits for replacement, then atomically rename it over the
+  destination. On publisher failure, report the unpublished temporary path
+  without deleting it. Return `"unchanged"` before creating a temporary registry
+  file for an identical registration, but only after making that decision under
+  the guard.
 
-- [ ] **Step 7: Run registration tests and record GREEN**
+  Remove the owned guard after success and after error. If removal fails, report
+  the retained guard path and whether publication occurred; do not retry, use a
+  fallback, delete other state, or claim clean completion. Never remove a guard
+  this operation did not acquire.
+
+- [ ] **Step 8: Run registration tests and record GREEN**
 
   Run the Step 2 command. Expected: all registration tests pass.
 
-- [ ] **Step 8: Mark tasks 1.1 and 1.2 complete, commit, and push**
+- [ ] **Step 9: Mark tasks 1.1 and 1.2 complete, commit, and push**
 
   ```bash
   git add src/casehomes/git-backed-casehome/registration.ts \
@@ -465,7 +504,10 @@ YAML, Zod, Vitest, OpenSpec.
 - [ ] **Step 1: Run focused acceptance coverage**
 
   Run the Task 4 Step 8 command and map every Issue #42 acceptance criterion to
-  a named test, including repository immutability and local bare-remote push.
+  a named test, including repository immutability, local bare-remote push,
+  registration-path and root-target type rejection, new and replacement
+  permissions, held-writer inter-process contention, latest-snapshot
+  preservation, guard cleanup outcomes, and no retry or fallback.
 
 - [ ] **Step 2: Run the complete repository gate**
 
@@ -488,8 +530,12 @@ YAML, Zod, Vitest, OpenSpec.
 
   Follow the superpowers-bridge instructions for `verify.md` and
   `retrospective.md`. Record actual commit/test evidence, subagent rulings and
-  costs, no front-door routing leaks, no deferred `[~]` tasks, and the exact
-  configured-push-versus-writability limitation.
+  costs, no front-door routing leaks, no deferred `[~]` tasks, the exact
+  configured-push-versus-writability limitation, and the Task 1 review
+  deviation: atomic rename alone did not serialize the snapshot transaction.
+  Verification MUST cite the independent-process contention witness, mode and
+  non-regular-entry cases, and cleanup-failure retained-state assertions before
+  Task 1 or the change may be accepted.
 
 - [ ] **Step 5: Mark task 5.2 complete and rerun verification**
 

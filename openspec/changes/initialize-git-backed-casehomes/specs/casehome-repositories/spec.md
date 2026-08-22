@@ -314,7 +314,10 @@ dirty or without a remote only when it has a commit and its valid strict
 The system SHALL store one strict YAML mapping at
 `<config-home>/casehomes.yaml` from a caller-validated canonical case ID to the
 canonical real absolute path ending in `/casegraph/root.yaml`, SHALL publish a
-complete changed mapping atomically, and MUST NOT add aliases or defaults.
+complete changed mapping atomically, SHALL serialize every mutation's
+read-validate-write-publish transaction with the exclusive sibling guard
+`<config-home>/casehomes.yaml.lock`, and MUST NOT add aliases, defaults, retries,
+or fallback publication.
 
 #### Scenario: New registration stores canonical root path
 
@@ -323,6 +326,8 @@ complete changed mapping atomically, and MUST NOT add aliases or defaults.
 - **THEN** `casehomes.yaml` maps that exact ID to the canonical real absolute
   CaseHome-root path
 - **THEN** the stored value ends in `/casegraph/root.yaml`
+- **THEN** the canonical root target is a regular file
+- **THEN** a newly created `casehomes.yaml` has permission mode `0600`
 - **THEN** no CaseFolder path, CaseHome directory path, alias, or default is
   stored
 
@@ -357,6 +362,64 @@ complete changed mapping atomically, and MUST NOT add aliases or defaults.
 - **THEN** registration and registration inspection fail with the configuration
   path and validation context
 - **THEN** no partial replacement is published
+
+#### Scenario: Registration document entry must be a regular file
+
+- **WHEN** the `casehomes.yaml` directory entry is a valid symlink, dangling
+  symlink, directory, or other non-regular filesystem entry
+- **THEN** registration and registration inspection reject that exact entry
+  after `lstat`
+- **THEN** the entry and its target, if any, remain unchanged
+- **THEN** the system does not treat the entry as an absent registry
+
+#### Scenario: Registration root target must be a regular file
+
+- **WHEN** a requested or stored canonical `casegraph/root.yaml` target is a
+  directory, device, or other non-regular filesystem entry
+- **THEN** registration and registration inspection reject the target with its
+  canonical path and filesystem type
+- **THEN** the registry bytes remain unchanged
+
+#### Scenario: Replacement preserves registry permission bits
+
+- **WHEN** an existing regular `casehomes.yaml` is valid and registration
+  publishes a changed complete mapping
+- **THEN** the replacement preserves the existing registry permission bits
+- **THEN** publication still uses an exclusively created sibling temporary file
+  and atomic rename
+
+#### Scenario: Contending registration fails without stale publication
+
+- **WHEN** one registration writer holds `casehomes.yaml.lock` before reading
+  and a second process attempts a conflicting registration
+- **THEN** the contender fails visibly with the guard path and contention state
+- **THEN** the contender does not read, replace, or change `casehomes.yaml`
+- **THEN** the contender does not report `"created"` or `"unchanged"`
+- **THEN** the contender does not retry or use a fallback publisher
+
+#### Scenario: Released guard protects the latest published snapshot
+
+- **WHEN** one writer publishes and releases its guard and a later registration
+  operation begins
+- **THEN** the later operation acquires the guard and rereads the published
+  mapping before validation
+- **THEN** it preserves the first writer's entry when it publishes another
+  non-conflicting entry
+- **THEN** two conflicting snapshot writers cannot both report `"created"`
+
+#### Scenario: Guard cleanup follows normal and error completion
+
+- **WHEN** a registration holder completes normally or fails before publication
+- **THEN** it removes its owned guard before returning when cleanup succeeds
+- **THEN** no contender removes a guard it did not acquire
+
+#### Scenario: Guard cleanup failure remains visible
+
+- **WHEN** removal of an acquired guard fails after normal or error completion
+- **THEN** the operation reports cleanup failure and the retained guard path
+- **THEN** the result reports whether registry publication already occurred
+- **THEN** the system does not retry, delete other state, use a fallback, or
+  claim clean completion
 
 ### Requirement: Preserve Explicit Recovery State
 
