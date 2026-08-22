@@ -124,7 +124,8 @@ import { z } from "zod";
 
 export const ResourceUidSchema = z
   .string()
-  .refine(isCuid, "CaseGraph resource UID must be a CUID2");
+  .refine(isCuid, "CaseGraph resource UID must be a CUID2")
+  .brand<"ResourceUid">();
 
 export type ResourceUid = z.infer<typeof ResourceUidSchema>;
 
