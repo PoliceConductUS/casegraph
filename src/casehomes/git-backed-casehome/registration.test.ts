@@ -65,23 +65,116 @@ describe("CaseHome machine registration reads", () => {
     expect(Reflect.get(registrations, "set")).toBeUndefined();
   });
 
+  test("reads exact nonempty entries through an immutable mapping facade", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const alphaRoot = await createCaseHomeRoot(directory, "alpha");
+    const zetaRoot = await createCaseHomeRoot(directory, "zeta");
+    await writeRegistration(
+      configHome,
+      `PoliceConductUS/alpha: ${alphaRoot}\nPoliceConductUS/zeta: ${zetaRoot}\n`,
+    );
+
+    const registrations = await new CaseHomeRegistrationStore().read(
+      configHome,
+    );
+    const visited: [string, string][] = [];
+    registrations.forEach((value, key, map) => {
+      expect(map).toBe(registrations);
+      visited.push([key, value]);
+    });
+
+    expect([...registrations]).toEqual([
+      ["PoliceConductUS/alpha", alphaRoot],
+      ["PoliceConductUS/zeta", zetaRoot],
+    ]);
+    expect(visited).toEqual([...registrations]);
+    expect([...registrations.keys()]).toEqual([
+      "PoliceConductUS/alpha",
+      "PoliceConductUS/zeta",
+    ]);
+    expect([...registrations.values()]).toEqual([alphaRoot, zetaRoot]);
+    expect(registrations.get("PoliceConductUS/alpha")).toBe(alphaRoot);
+    expect(registrations.has("PoliceConductUS/zeta")).toBe(true);
+    expect(Object.isFrozen(registrations)).toBe(true);
+    expect(Reflect.get(registrations, "set")).toBeUndefined();
+    expect(Reflect.get(registrations, "delete")).toBeUndefined();
+    expect(Reflect.get(registrations, "clear")).toBeUndefined();
+  });
+
+  test("rejects malformed YAML with its parser and casehomes.yaml context", async () => {
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const registrationPath = await writeRegistration(
+      configHome,
+      "PoliceConductUS/example: [\n",
+    );
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: Flow sequence in block collection must be sufficiently indented and end with a ]`,
+    );
+  });
+
   test.each([
-    ["malformed YAML", "PoliceConductUS/example: [\n"],
-    ["a sequence root", "- PoliceConductUS/example\n"],
-    ["a scalar root", "PoliceConductUS/example\n"],
-    [
-      "a duplicate key",
-      "PoliceConductUS/example: /one/casegraph/root.yaml\nPoliceConductUS/example: /two/casegraph/root.yaml\n",
-    ],
-    ["a non-string key", "42: /cases/example/casegraph/root.yaml\n"],
-    ["a non-string value", "PoliceConductUS/example: 42\n"],
-  ])("rejects %s with casehomes.yaml context", async (_name, content) => {
+    ["sequence", "- PoliceConductUS/example\n"],
+    ["scalar", "PoliceConductUS/example\n"],
+  ])("rejects a %s root as a non-mapping document", async (_name, content) => {
     const configHome = await temporaryDirectory("casegraph-config-");
     const registrationPath = await writeRegistration(configHome, content);
 
     await expect(
       new CaseHomeRegistrationStore().read(configHome),
-    ).rejects.toThrow(registrationPath);
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: document root must be a mapping`,
+    );
+  });
+
+  test("rejects duplicate keys before inspecting their real root paths", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const firstRoot = await createCaseHomeRoot(directory, "first");
+    const secondRoot = await createCaseHomeRoot(directory, "second");
+    const registrationPath = await writeRegistration(
+      configHome,
+      `PoliceConductUS/example: ${firstRoot}\nPoliceConductUS/example: ${secondRoot}\n`,
+    );
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: Map keys must be unique`,
+    );
+  });
+
+  test("rejects a non-string key before inspecting its real root path", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = await writeRegistration(
+      configHome,
+      `42: ${rootPath}\n`,
+    );
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: mapping keys must be strings`,
+    );
+  });
+
+  test("rejects a non-string value with casehomes.yaml context", async () => {
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const registrationPath = await writeRegistration(
+      configHome,
+      "PoliceConductUS/example: 42\n",
+    );
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: mapping values must be strings`,
+    );
   });
 
   test("rejects a missing stored root with casehomes.yaml context", async () => {
