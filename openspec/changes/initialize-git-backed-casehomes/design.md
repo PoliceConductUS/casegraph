@@ -74,18 +74,36 @@ preserves the Issue #40 envelope reader and Issue #41 canonical storage
 validation inside the new package; it does not alter the durable legacy command
 requirements before Issue #45 replaces their public entry points.
 
-The Git boundary executes argument arrays without a shell and reports the Git
-top-level, Git directory, common directory, branch or detached state, unborn or
-committed state, dirty state, every remote name, and every configured fetch and
-effective push URL. It also reports whether `root.yaml` is tracked in `HEAD`.
-Structural push-target readiness means a caller-selected remote exists and
-`git remote get-url --push` returns a nonempty URL. It does not claim network,
-authentication, authorization, or server writability; only `git push` can
-prove those at that moment.
+`CaseHomeResourceSnapshot` exposes a frozen, lexicographically sorted
+`documentPaths` copy containing the canonical authoritative Case root and every
+reachable member document exactly once. The storage boundary records those
+paths while it opens the rooted graph; it performs no second document read,
+path inspection, or directory scan. Cycles and repeated references contribute
+one path, and unreferenced resources contribute none. The order is presentation
+and recovery order only, never traversal, resource UID, or membership order.
+Inspection copies these paths into the recovery inventory instead of deriving
+resource documents from directory contents.
 
-Every report includes a recovery inventory of existing directories, resource
-files, Git state, commit identity when present, configured remotes, and
-registration state. Reports distinguish registration eligibility from mutation
+The Git boundary executes argument arrays without a shell and disables optional
+Git locks for every repository-inspection command so status/stat refresh cannot
+rewrite the index. It reports the Git top-level, Git directory, common
+directory, branch or detached state, unborn or committed state, dirty state,
+every remote name, and every configured fetch and effective push URL. It also
+reports whether `root.yaml` is tracked in `HEAD`. Structural push-target
+readiness means a caller-selected remote exists and
+`git remote get-url --push` returns a nonempty URL. It does not claim network,
+authentication, authorization, or server writability; only `git push` can prove
+those at that moment.
+
+Every report includes a recovery inventory of safely observed directories,
+authoritative `documentPaths`, Git state, commit identity when present,
+configured remotes, and registration state. Reports distinguish observed
+absence from state not inspected after an early Git-unavailable or child-
+identity conflict. A different registration for the requested ID or an inverse
+conflicting-root registration makes registration eligibility false. Inherited
+outer inspection preserves raw index bytes and every pre-existing outer-owned
+file byte. Symlink conflicts report the observable child entry without reading
+its target. Reports distinguish registration eligibility from mutation
 readiness.
 
 ### Prepare local state without claiming durability

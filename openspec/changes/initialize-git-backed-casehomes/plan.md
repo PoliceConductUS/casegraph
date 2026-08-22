@@ -181,10 +181,12 @@ YAML, Zod, Vitest, OpenSpec.
 
 **Files:**
 
-- Create: `src/casehomes/git-backed-casehome/git.ts`
-- Create: `src/casehomes/git-backed-casehome/index.ts`
-- Create: `src/casehomes/git-backed-casehome/inspect.ts`
-- Create: `src/casehomes/git-backed-casehome/inspect.test.ts`
+- Modify: `src/resources/casehome-storage/casehome-resources.ts`
+- Modify: `src/resources/casehome-storage/casehome-resources.test.ts`
+- Modify: `src/casehomes/git-backed-casehome/git.ts`
+- Verify unchanged: `src/casehomes/git-backed-casehome/index.ts`
+- Modify: `src/casehomes/git-backed-casehome/inspect.ts`
+- Modify: `src/casehomes/git-backed-casehome/inspect.test.ts`
 - Verify unchanged: `src/cli.ts`
 - Verify unchanged: `test/cli.test.ts`
 
@@ -192,6 +194,9 @@ YAML, Zod, Vitest, OpenSpec.
 
 - Consumes: `CaseHomeRegistrationStore.read` from Task 1,
   `openCaseHomeResources`, and `CaseResourceRegistry`.
+- Modifies: `CaseHomeResourceSnapshot` to expose immutable
+  `documentPaths: readonly string[]` populated from already-opened rooted
+  members.
 - Produces: `GitRunner(args: readonly string[], cwd: string): Promise<CommandResult>`.
 - Produces: `inspectGitBackedCaseHome(input, dependencies): Promise<CaseHomeRepositoryReport>` where the report is a discriminated immutable value with exact
   paths, resource state, repository state, remotes, structural push-target
@@ -202,8 +207,11 @@ YAML, Zod, Vitest, OpenSpec.
 
   Use `git init`, `git add`, `git commit`, `git remote add`, and temporary local
   paths through `execFile`, with a test-local author identity. Snapshot file
-  bytes plus parsed `git status --porcelain=v1`, `git show-ref`, remote
-  configuration, and the registration bytes before inspection.
+  bytes plus raw index bytes, parsed `git status --porcelain=v1`,
+  `git show-ref`, remote configuration, and the registration bytes before
+  inspection. Add a stale-stat index fixture, a rooted graph whose discovery
+  order differs from lexical document-path order, cycles/repeats, and an
+  unreferenced canonical-looking resource.
 
 - [ ] **Step 2: Write failing report and immutability tests**
 
@@ -213,10 +221,20 @@ YAML, Zod, Vitest, OpenSpec.
   readiness, registration state, and recovery inventory. Prove every snapshot
   from Step 1 is byte-identical after inspection.
 
+  In `casehome-resources.test.ts`, write REDs proving `documentPaths` contains
+  the canonical root and all direct/transitive authoritative member documents
+  once, cycles/repeats once, and unreferenced documents zero times. Prove the
+  array is frozen and lexicographically sorted even when discovery order differs,
+  every entry has exact canonical containment, and no extra document read/path
+  inspection/directory scan is used to populate it. In `inspect.test.ts`, prove
+  recovery copies those snapshot paths exactly once and does not infer resource
+  paths by scanning the CaseHome.
+
   Add a CaseFolder fixture that is itself a committed repository. With no exact
   child repository, assert inspection reports the inherited root as
   non-primary rather than primary or conflicting, while its files, index, refs,
-  branches, remotes, and upstreams remain byte-identical.
+  branches, remotes, and upstreams remain byte-identical. Assert every
+  pre-existing outer-owned file byte and the raw outer index bytes are unchanged.
 
 - [ ] **Step 3: Write failing conflict tests**
 
@@ -225,26 +243,53 @@ YAML, Zod, Vitest, OpenSpec.
   worktree, `--separate-git-dir`, and submodule. Cover missing Git executable,
   missing or invalid strict root, and rooted resource-storage failure. Assert
   expected Git root/directory/common-directory paths appear where applicable.
+  Prove all repository-inspection Git invocations disable optional locks and a
+  stale-stat fixture leaves raw index bytes unchanged. Prove current,
+  different, conflicting-root, absent, and invalid registration states are
+  reported and only current/absent non-conflicting state can remain registration-
+  eligible when all repository prerequisites pass.
+
+  For Git-unavailable and observable child-conflict exits, prove resource and
+  registration state is reported as not inspected rather than falsely absent,
+  and recovery lists only paths safely observed before return. For a symlinked
+  child, prove the symlink entry is observable in diagnostics/recovery while no
+  target read occurs.
 
 - [ ] **Step 4: Run inspection tests and record RED**
 
   ```bash
-  npm test -- src/casehomes/git-backed-casehome/inspect.test.ts
+  npm test -- \
+    src/resources/casehome-storage/casehome-resources.test.ts \
+    src/casehomes/git-backed-casehome/inspect.test.ts
   ```
 
-  Expected: FAIL because inspection and Git boundaries do not exist.
+  Expected: FAIL against the existing boundaries because the snapshot lacks
+  `documentPaths`, recovery omits transitive document paths, inspection does not
+  disable optional Git locks, conflicting registrations remain eligible, and
+  early exits report uninspected state as absent. The original missing-boundary
+  RED remains historical evidence only in `task-2-report.md`.
 
 - [ ] **Step 5: Implement the direct Git runner and exact inspection**
 
-  Use `execFileResult("git", args, { cwd })`; never use a shell command. Derive
-  the exact child without recursively scanning, reject symlink identity before
+  Extend `CaseHomeResourceSnapshot` with a frozen lexicographically sorted copy
+  of canonical authoritative document paths recorded as the root and each
+  reachable member is already opened. Do not reread documents, inspect extra
+  paths, scan directories, or encode traversal/UID/membership order. Copy those
+  paths into recovery exactly once.
+
+  Use `execFileResult("git", args, { cwd })`; never use a shell command. Disable
+  optional locks for every repository-inspection Git invocation. Derive the
+  exact child without recursively scanning, reject symlink identity before
   following it, compare real paths to Git's `--show-toplevel`, report an
   inherited outer root as non-primary, and reject every `.git` file regardless
   of whether it names a linked worktree, separate Git directory, or submodule.
   Read Git/remotes through explicit non-mutating commands. Load resources only
-  through `openCaseHomeResources` and registration only through Task 1. Freeze
-  copied arrays and nested report values. Export inspection from the package
-  entry point without changing `src/cli.ts`.
+  through `openCaseHomeResources` and registration only through Task 1. Treat
+  different and conflicting-root registration as ineligible. On early failure,
+  distinguish not-inspected state from observed absence and inventory only
+  safely observed entries; never read a symlink target. Freeze copied arrays and
+  nested report values. Export inspection from the package entry point without
+  changing `src/cli.ts` or entering Task 3.
 
 - [ ] **Step 6: Prove current inspection import and CLI boundaries**
 
@@ -260,20 +305,29 @@ YAML, Zod, Vitest, OpenSpec.
   #41 parent, and the inspection boundary is importable without changing CLI
   behavior.
 
-- [ ] **Step 7: Run inspection tests and record GREEN**
+- [ ] **Step 7: Run GREEN and discriminating mutation proofs**
 
-  Run the Step 4 command. Expected: all exact-state, conflict, and immutability
-  tests pass.
+  Run the Step 4 command. Expected: all exact-state, snapshot, recovery,
+  conflict, and immutability tests pass.
+
+  Temporarily return discovery-order paths without sorting; rerun the focused
+  storage test and require only the lexical-order witness to fail. Restore, then
+  temporarily append a canonical-looking unreferenced document path; require
+  the unreferenced-zero witness to fail. Restore, then temporarily omit optional
+  lock disabling from inspection; require the stale-stat raw-index witness to
+  fail. Restore production after every mutation and rerun the complete focused
+  GREEN.
 
 - [ ] **Step 8: Mark tasks 2.1 and 2.2 complete, commit, and push**
 
   ```bash
-  git add src/casehomes/git-backed-casehome/git.ts \
-    src/casehomes/git-backed-casehome/index.ts \
+  git add src/resources/casehome-storage/casehome-resources.ts \
+    src/resources/casehome-storage/casehome-resources.test.ts \
+    src/casehomes/git-backed-casehome/git.ts \
     src/casehomes/git-backed-casehome/inspect.ts \
     src/casehomes/git-backed-casehome/inspect.test.ts \
     openspec/changes/initialize-git-backed-casehomes/tasks.md
-  git commit -m "feat(casehomes): inspect exact primary repositories"
+  git commit -m "feat(casehomes): expose read-only recovery inventory"
   git push
   ```
 

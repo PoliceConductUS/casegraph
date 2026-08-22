@@ -12,6 +12,9 @@ registration rules.
 
 - Add a read-only exact repository inspection report for the selected
   CaseFolder and its `casegraph/` child.
+- Expose the canonical authoritative document paths already opened by the
+  strict rooted-resource snapshot and use them in recovery reporting without a
+  second read or directory scan.
 - Add preparation for a missing or empty child and explicitly approved adoption
   of an existing strict non-Git CaseHome, with empty membership required only
   for newly written roots and an explicit boolean representing both approval and
@@ -55,7 +58,9 @@ registration rules.
 
 ### Modified Capabilities
 
-None.
+- `casehome-resource-storage`: Add immutable lexically sorted authoritative
+  rooted-document paths to the existing snapshot without defining traversal,
+  UID, or membership order.
 
 ## Impact
 
@@ -63,5 +68,7 @@ None.
   `src/casehomes/git-backed-casehome/` with focused unit tests and real Git/local
   bare-remote integration tests.
 - Uses the existing strict Case resource writer and rooted CaseHome reader.
+- Modifies the rooted CaseHome snapshot and its focused tests only to expose
+  already-opened authoritative document paths for recovery.
 - Adds no public CLI, provider API, dependency, infrastructure, worktree,
   migration, hosting, portable `config.yaml`, alias, or default behavior.

@@ -21,8 +21,8 @@ surrounding CaseFolder outside that repository.
 - **AND** its exact `casegraph/` child is available
 - **THEN** inspection reports the inherited repository root as non-primary
 - **THEN** preparation initializes the exact child as a distinct repository
-- **THEN** every pre-existing outer-owned file byte, index entry, ref, branch,
-  remote, and upstream remains unchanged
+- **THEN** every pre-existing outer-owned file byte, raw index byte, index entry,
+  ref, branch, remote, and upstream remains unchanged
 - **THEN** every pre-existing outer repository status entry remains unchanged
 - **THEN** the only permitted outer status delta, if Git reports one, is Git's
   natural representation of the nested CaseHome child
@@ -34,7 +34,11 @@ surrounding CaseFolder outside that repository.
 #### Scenario: Symlinked CaseHome child is rejected
 
 - **WHEN** `<case-folder>/casegraph` is a symbolic link
+- **THEN** inspection reports the observed symlink entry and does not report its
+  resource or registration state as inspected or absent
 - **THEN** inspection and preparation fail before reading or writing its target
+- **THEN** the recovery inventory contains only safely observed path state and
+  never reads or lists target contents
 - **THEN** no repository, commit, push, or registration is created
 
 #### Scenario: Conflicting CaseHome child is rejected
@@ -42,6 +46,9 @@ surrounding CaseFolder outside that repository.
 - **WHEN** `<case-folder>/casegraph` is a non-directory file, invalid CaseHome,
   or existing repository with a different top-level
 - **THEN** inspection identifies the conflict
+- **THEN** the report distinguishes safely inspected resource and registration
+  state from state not inspected and inventories only safely observed recovery
+  paths
 - **THEN** preparation fails without changing the child or registration
 
 ### Requirement: Inspect Repository State Without Mutation
@@ -49,7 +56,9 @@ surrounding CaseFolder outside that repository.
 The system SHALL inspect one exact CaseHome without changing files, the Git
 index, commits, refs, branches, remotes, upstreams, or machine registration and
 SHALL report enough state to distinguish registration eligibility, structural
-push readiness, mutation readiness, and safe recovery.
+push readiness, mutation readiness, and safe recovery. Every Git command used
+to inspect repository state MUST explicitly disable Git optional locks so
+inspection cannot refresh stale-stat index bytes.
 
 #### Scenario: Existing primary repository is fully reported
 
@@ -64,12 +73,23 @@ push readiness, mutation readiness, and safe recovery.
   effective push URL
 - **THEN** the report includes current machine registration and a safe recovery
   inventory
+- **THEN** the recovery inventory includes every canonical authoritative
+  resource document path from the strict reader's
+  `CaseHomeResourceSnapshot.documentPaths` exactly once
 
 #### Scenario: Read-only inspection preserves repository bytes and refs
 
 - **WHEN** the system inspects an existing CaseHome repository
-- **THEN** every CaseHome file byte, index entry, ref, remote, upstream, and
-  registration byte remains unchanged
+- **THEN** every CaseHome file byte, raw Git index byte, index entry, ref,
+  remote, upstream, and registration byte remains unchanged
+
+#### Scenario: Repository inspection disables optional Git locks
+
+- **WHEN** repository inspection runs any Git command that reads repository
+  state
+- **THEN** that invocation explicitly disables Git optional locks
+- **THEN** a repository with stale-stat index data retains byte-identical raw
+  index contents after inspection
 
 #### Scenario: Inherited repository root is non-primary
 
@@ -79,7 +99,8 @@ push readiness, mutation readiness, and safe recovery.
 - **THEN** inspection reports both expected and inherited repository roots
 - **THEN** inspection classifies the child as available or adoptable rather than
   as a primary CaseHome
-- **THEN** the containing repository remains unchanged
+- **THEN** every containing-repository-owned file byte, raw index byte, index
+  entry, ref, branch, remote, and upstream remains unchanged
 
 #### Scenario: Gitfile checkout is not a primary CaseHome
 
@@ -96,6 +117,11 @@ push readiness, mutation readiness, and safe recovery.
 - **WHEN** the Git executable required for repository inspection is unavailable
 - **THEN** inspection and every repository mutation fail with a diagnostic that
   identifies Git as unavailable
+- **THEN** the report distinguishes resource and registration state that was
+  safely inspected from state that was not inspected and does not report
+  uninspected state as absent
+- **THEN** the recovery inventory contains only paths and state safely observed
+  before the failure
 - **THEN** no CaseHome file, repository, commit, push, or registration is created
 
 ### Requirement: Validate CaseHome Resources Through The Strict Reader
@@ -309,6 +335,16 @@ dirty or without a remote only when it has a commit and its valid strict
   present in the working tree
 - **THEN** no machine registration is written
 
+#### Scenario: Different or conflicting machine registration is ineligible
+
+- **WHEN** the selected canonical case ID is already registered to a different
+  canonical root path
+- **OR** another canonical case ID is already registered to the selected
+  canonical root path
+- **THEN** inspection marks existing-repository registration eligibility false
+- **THEN** the report identifies the different or conflicting registration
+  without changing `casehomes.yaml`
+
 ### Requirement: Store Machine Registration Atomically
 
 The system SHALL store one strict YAML mapping at
@@ -485,6 +521,17 @@ guard-state classification, and exact registry-publication state.
 The system MUST preserve and report filesystem and Git state after every failed
 mutation and MUST NOT delete or silently compensate for a CaseHome directory,
 resource, repository, commit, ref, remote, pushed commit, or registration.
+
+#### Scenario: Recovery uses exact strict resource document paths
+
+- **WHEN** strict CaseHome opening succeeds during inspection or recovery
+- **THEN** recovery includes every entry from
+  `CaseHomeResourceSnapshot.documentPaths` exactly once
+- **THEN** recovery includes no unreferenced resource document
+- **THEN** recovery obtains those paths without an additional document read,
+  path inspection, or directory scan
+- **THEN** lexicographic recovery presentation does not expose or promise
+  traversal, resource UID, or membership order
 
 #### Scenario: Preparation failure reports existing state
 
