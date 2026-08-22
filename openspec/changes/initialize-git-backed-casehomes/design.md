@@ -97,7 +97,33 @@ no-read boundary observable without a production test seam.
 
 The Git boundary executes argument arrays without a shell and disables optional
 Git locks for every repository-inspection command so status/stat refresh cannot
-rewrite the index. It reports the Git top-level, Git directory, common
+rewrite the index. Its default runner copies required non-Git environment such
+as `PATH`, removes every ambient `GIT_*` entry, and sets only
+`GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`,
+`GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C`. The explicit
+`--no-optional-locks` command control remains. This prevents repository,
+worktree, index, common-directory, object/ref/namespace, and configuration
+overrides from redirecting exact inspection or importing hostile global/system
+configuration; no public environment seam is added.
+Repository-local configuration remains readable for A's existing remotes and
+upstream, but this layer still does not create or modify provider/remote
+configuration.
+
+Every required Git result is command-classified before its value is used. An
+unexpected nonzero result returns repository state and classification
+`unavailable`, names the command diagnostic in both readiness policies, keeps
+only safely observed recovery facts, copies the same diagnostic to
+`recovery.repositoryDiagnostic`, and stops before later Git inspection.
+The only narrow nonzero states are the sanitized no-repository result when no
+exact `.git` entry exists and quiet empty-output HEAD absence for an unborn
+repository. Branch and upstream commands use successful empty output for
+detached/no-upstream state where practical. Bare state is established before
+top-level inspection. Status, absolute Git directory, common directory,
+bare-state, required non-bare top-level, committed-root `ls-tree`, remote list,
+and configured fetch/push URL failures never become dirty, absent, untracked,
+or empty values.
+
+Successful inspection reports the Git top-level, Git directory, common
 directory, branch or detached state, unborn or committed state, dirty state,
 every remote name, and every configured fetch and effective push URL. It also
 reports whether `root.yaml` is tracked in `HEAD`. Structural push-target
@@ -111,12 +137,13 @@ Every report includes `classification`, `paths`, `resource`, `repository`,
 `mutationReadiness`, `diagnostics`, and `recovery`. The public resource union
 adds `{ state: "not-inspected"; diagnostic: string }`; the repository union adds
 that same not-inspected variant while retaining
-`{ state: "unavailable"; diagnostic: string }` for missing Git. A symlink or
-non-directory exact child returns the two not-inspected variants because child
-identity prevents both strict-resource and repository inspection. Its
-independent machine registry is still read and returns current, different,
-conflicting-root, absent, or invalid with its diagnostic; it is never called
-absent or not inspected merely because the child is unusable.
+`{ state: "unavailable"; diagnostic: string }` for missing Git or a required
+Git command failure. The registration union also adds the not-inspected variant.
+A symlink or non-directory exact child returns all three not-inspected variants
+because child identity prevents strict-resource and repository inspection and
+the strict registration reader dereferences every stored canonical root during
+validation. Zero target access takes priority: the registry reader is not
+invoked and recovery records registration as not inspected.
 
 Git-unavailable inspection of a safely identifiable normal child still opens
 strict resources and reads registration. Only its repository is unavailable.

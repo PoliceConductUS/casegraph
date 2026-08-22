@@ -12,8 +12,13 @@ registration rules.
 
 - Add a read-only exact repository inspection report for the selected
   CaseFolder and its `casegraph/` child.
-- Report exact early resource and repository discriminants while inspecting
-  machine registration independently whenever its registry is readable.
+- Report required Git command failures as unavailable rather than inventing
+  ordinary repository facts, and isolate default inspection from ambient Git
+  selectors and configuration.
+- Report exact early resource and repository discriminants; skip strict machine
+  registration inspection when a symlink/non-directory child makes target
+  dereference unsafe, while retaining independent registration inspection for
+  safe normal and Git-unavailable directories.
 - Expose the canonical authoritative document paths already opened by the
   strict rooted-resource snapshot and use them in recovery reporting without a
   second read or directory scan.

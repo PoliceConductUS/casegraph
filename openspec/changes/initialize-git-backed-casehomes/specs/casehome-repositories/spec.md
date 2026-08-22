@@ -39,8 +39,10 @@ surrounding CaseFolder outside that repository.
   `CaseHomeResourceReport { state: "not-inspected", diagnostic }`
 - **THEN** `repository` is
   `RepositoryReport { state: "not-inspected", diagnostic }`
-- **THEN** `registration` reports the independently inspected machine registry
-  state rather than inferring `absent` or `not-inspected`
+- **THEN** `registration` is
+  `RegistrationReport { state: "not-inspected", diagnostic }`
+- **THEN** inspection does not invoke the machine registration reader because
+  strict registration validation can dereference stored root targets
 - **THEN** inspection and preparation fail before reading or writing its target
 - **THEN** inspection performs `lstat` on the exact link entry and performs zero
   opens, reads, realpath resolutions, or directory enumerations through the link
@@ -56,8 +58,8 @@ surrounding CaseFolder outside that repository.
 - **THEN** a non-directory exact child reports
   `CaseHomeResourceReport { state: "not-inspected", diagnostic }` and
   `RepositoryReport { state: "not-inspected", diagnostic }`
-- **THEN** machine registration is independently inspected and recovery
-  inventories only safely observed paths
+- **THEN** machine registration is not inspected and recovery inventories only
+  safely observed paths
 - **THEN** preparation fails without changing the child or registration
 
 #### Scenario: Exact child identity failure has complete public state
@@ -68,15 +70,16 @@ surrounding CaseFolder outside that repository.
   resolving through the invalid child
 - **THEN** `resource` and `repository` are their respective
   `{ state: "not-inspected", diagnostic }` variants
-- **THEN** `registration` contains the independently inspected registry state
+- **THEN** `registration` is
+  `{ state: "not-inspected", diagnostic }` and the registration reader is not
+  invoked
 - **THEN** `structuralPushTarget.ready`,
   `registrationEligibility.eligible`, and `mutationReadiness.ready` are false
-  with empty push URLs and exact identity-failure and independently observed
-  invalid-registry reasons
+  with empty push URLs and exact identity-failure reasons
 - **THEN** `diagnostics` contains the resource and repository identity
-  diagnostics plus any independent invalid-registry diagnostic
+  diagnostics plus the registration-not-inspected diagnostic
 - **THEN** `recovery` contains only safely observed path entries, no resource
-  count, commit, or remotes, and the observed registration state
+  count, commit, or remotes, and registration state `"not-inspected"`
 
 ### Requirement: Inspect Repository State Without Mutation
 
@@ -95,7 +98,10 @@ MUST include `{ state: "not-inspected"; diagnostic: string }` for an exact child
 whose identity prevents strict-resource inspection. `RepositoryReport` MUST
 include `{ state: "not-inspected"; diagnostic: string }` for that same identity
 failure and `{ state: "unavailable"; diagnostic: string }` when Git itself is
-unavailable.
+unavailable or a required inspection command fails. `RegistrationReport` MUST
+include `{ state: "not-inspected"; diagnostic: string }` for a symlink or
+non-directory exact child whose zero-target-access rejection prevents safe
+strict registration inspection.
 
 #### Scenario: Existing primary repository is fully reported
 
@@ -127,6 +133,106 @@ unavailable.
 - **THEN** that invocation explicitly disables Git optional locks
 - **THEN** a repository with stale-stat index data retains byte-identical raw
   index contents after inspection
+
+### Requirement: Report Required Git Inspection Failures Exactly
+
+The system MUST classify every unexpected nonzero result from a required
+repository-inspection Git command as
+`RepositoryReport { state: "unavailable", diagnostic }`. The diagnostic MUST
+identify the failed command and its exit/stderr context. The enclosing report
+MUST set `classification` to `"unavailable"`, set structural push readiness,
+registration eligibility, and mutation readiness false with the command-failure
+reason, set `recovery.repositoryDiagnostic` to the same command-failure
+diagnostic, preserve only recovery facts safely observed before failure, and
+MUST NOT execute later repository-inspection commands or infer their state.
+
+The only expected nonzero results are narrowly classified command states: when
+the exact child has no `.git` entry, the sanitized `LC_ALL=C` no-repository
+result from repository discovery MAY mean absent/non-Git; and
+`rev-parse --verify --quiet HEAD` with its expected empty-output miss MAY mean
+unborn. Detached branch and missing-upstream inspection MUST use commands that
+return success with empty output where practical. A bare repository MUST be
+identified before top-level inspection so its inapplicable top-level result is
+not treated as failure. No other nonzero result may be interpreted as ordinary
+absence.
+
+#### Scenario: Required command failures do not become ordinary state
+
+- **WHEN** absolute Git-directory, common-directory, bare-state, non-bare
+  top-level, status, committed-root `ls-tree`, remote-list, or configured-remote
+  fetch/push-URL inspection returns an unexpected nonzero result
+- **THEN** repository state and classification are `"unavailable"` with that
+  exact command diagnostic
+- **THEN** the report does not describe the failure as absent repository,
+  unborn or detached HEAD, dirty working tree, missing upstream, untracked root,
+  missing remote, or empty remote URL
+- **THEN** registration and mutation readiness are false for the exact Git
+  inspection failure
+- **THEN** `recovery.repositoryDiagnostic` equals the unavailable repository
+  diagnostic
+- **THEN** recovery contains no Git fact from the failed command or any later
+  command
+
+#### Scenario: Expected empty Git states remain representable
+
+- **WHEN** an exact child without a `.git` entry produces the recognized
+  sanitized C-locale no-repository discovery result
+- **THEN** inspection may report absent/non-Git rather than unavailable
+- **WHEN** quiet committed-HEAD verification produces its expected empty-output
+  miss
+- **THEN** inspection reports unborn rather than unavailable
+- **WHEN** successful branch or upstream inspection returns empty output
+- **THEN** inspection reports detached HEAD or no upstream respectively
+
+#### Scenario: Failure table stops before later false facts
+
+- **WHEN** an injected table row fails one required command after zero or more
+  earlier commands succeeded
+- **THEN** the report preserves only safely observed resource, registration,
+  recovery, and earlier Git facts supported by successful commands
+- **THEN** no later Git command in the row is invoked
+- **THEN** no default boolean, empty array, or omitted value is presented as a
+  fact that the failed or skipped command would have established
+
+### Requirement: Isolate Default Git Inspection From Ambient State
+
+The default inspection runner MUST construct its child-process environment by
+preserving required non-Git values such as `PATH`, removing every inherited
+environment entry whose name starts with `GIT_`, and then setting only the
+intentional Git controls `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`, and
+`GIT_CONFIG_GLOBAL=<os.devNull>`, together with `LC_ALL=C`. It MUST continue to
+pass the explicit no-optional-locks command control. It MUST NOT expose a public
+environment or test seam.
+
+#### Scenario: Ambient repository selectors cannot redirect inspection
+
+- **WHEN** CaseHome A is inspected while ambient `GIT_DIR`, `GIT_WORK_TREE`,
+  `GIT_INDEX_FILE`, common-directory, object-database, alternate-object,
+  namespace, ref, or repository/config override values point at repository B
+- **THEN** the default runner removes every ambient `GIT_*` value before Git
+  starts
+- **THEN** the report contains only A's Git root, common directory, index,
+  objects/refs, branch, dirty/tracked-root state, remotes, and recovery facts
+- **THEN** no B path or repository fact can make B masquerade as A or alter A's
+  report
+
+#### Scenario: Hostile global and system configuration is ignored
+
+- **WHEN** ambient global or system Git configuration would redirect worktree,
+  repository, index, objects/refs, includes, or remote values to repository B
+- **THEN** the default runner uses `GIT_CONFIG_NOSYSTEM=1` and
+  `GIT_CONFIG_GLOBAL=<os.devNull>` after removing ambient `GIT_*` values
+- **THEN** inspection reports A's exact dirty, tracked-root, and remote state
+  without any value supplied only by the hostile configuration
+- **THEN** inspection may read A's repository-local configuration but does not
+  create, modify, or select provider/remote configuration
+
+#### Scenario: Required non-Git environment remains available
+
+- **WHEN** the default runner sanitizes the environment
+- **THEN** it preserves `PATH` and other required non-Git process values
+- **THEN** Git executes with `LC_ALL=C`, `GIT_OPTIONAL_LOCKS=0`, and the isolated
+  configuration controls
 
 #### Scenario: Inherited repository root is non-primary
 
@@ -172,20 +278,21 @@ unavailable.
   resource or invalid-registry diagnostic
 - **THEN** the recovery inventory contains only paths and state safely observed
   before return, including strict `documentPaths` and registration state when
-  those inspections succeed, and no commit or remote state
+  those inspections succeed, no commit or remote state, and
+  `repositoryDiagnostic` equal to the Git-unavailable diagnostic
 - **THEN** no CaseHome file, repository, commit, push, or registration is created
 
-#### Scenario: Registration inspection is independent on early return
+#### Scenario: Registration inspection remains independent when Git is unavailable
 
-- **WHEN** exact-child identity or Git availability prevents repository
-  inspection
+- **WHEN** Git availability prevents repository inspection of a safely
+  identifiable normal directory
 - **THEN** the system still reads `<config-home>/casehomes.yaml`
 - **THEN** it reports `registration.state: "absent"` only when that read succeeds
   and contains no applicable mapping
 - **THEN** a registry read or validation failure reports the existing
   `registration.state: "invalid"` with its diagnostic
-- **THEN** child or Git failure never causes registration to be labeled
-  `not-inspected` or falsely `absent`
+- **THEN** Git failure never causes registration to be labeled `not-inspected`
+  or falsely `absent`
 
 ### Requirement: Validate CaseHome Resources Through The Strict Reader
 

@@ -186,6 +186,7 @@ YAML, Zod, Vitest, OpenSpec.
 - Create:
   `src/resources/casehome-storage/casehome-resources.path-observation.test.ts`
 - Modify: `src/casehomes/git-backed-casehome/git.ts`
+- Create: `src/casehomes/git-backed-casehome/git.test.ts`
 - Verify unchanged: `src/casehomes/git-backed-casehome/index.ts`
 - Modify: `src/casehomes/git-backed-casehome/inspect.ts`
 - Modify: `src/casehomes/git-backed-casehome/inspect.test.ts`
@@ -202,6 +203,9 @@ YAML, Zod, Vitest, OpenSpec.
   `documentPaths: readonly string[]` populated from already-opened rooted
   members.
 - Produces: `GitRunner(args: readonly string[], cwd: string): Promise<CommandResult>`.
+- Modifies: `createGitRunner()` internally to sanitize its child-process
+  environment without changing `GitRunner`, accepting environment input, or
+  exporting a test seam.
 - Produces: `inspectGitBackedCaseHome(input, dependencies): Promise<CaseHomeRepositoryReport>` where the report is a discriminated immutable value with exact
   paths, resource state, repository state, remotes, structural push-target
   state, registration state, mutation readiness, diagnostics, and recovery
@@ -210,6 +214,11 @@ YAML, Zod, Vitest, OpenSpec.
   `{ state: "not-inspected"; diagnostic: string }` and `RepositoryReport` with
   that exact identity-failure variant while retaining
   `{ state: "unavailable"; diagnostic: string }` for Git failure.
+- Modifies: `RegistrationReport` with exact
+  `{ state: "not-inspected"; diagnostic: string }` used only when rejected child
+  identity makes strict registry validation unsafe.
+- Modifies: unavailable recovery with
+  `repositoryDiagnostic: string` equal to the unavailable repository diagnostic.
 - Preserves: the production `openCaseHomeResources(caseHomePath, registry)`
   parameters and the exported `InspectGitBackedCaseHomeDependencies` and package
   API. No filesystem observer, counter, or test-only field enters production;
@@ -224,7 +233,10 @@ YAML, Zod, Vitest, OpenSpec.
   `git show-ref`, remote configuration, and the registration bytes before
   inspection. Add a stale-stat index fixture, a rooted graph whose discovery
   order differs from lexical document-path order, cycles/repeats, and an
-  unreferenced canonical-looking resource.
+  unreferenced canonical-looking resource. Add distinct repositories A and B
+  with different roots, indexes, object/ref/common state, dirty/tracked-root
+  state, and remotes, plus hostile global/system configuration that points from
+  A toward B.
 
 - [ ] **Step 2: Write failing report and immutability tests**
 
@@ -287,16 +299,17 @@ YAML, Zod, Vitest, OpenSpec.
   For symlink and non-directory exact children, assert every named public field:
   `classification: "conflict"`; exact `paths`;
   `CaseHomeResourceReport { state: "not-inspected", diagnostic }`;
-  `RepositoryReport { state: "not-inspected", diagnostic }`; independently
-  inspected registration; false structural/registration/mutation readiness;
-  exact diagnostics; and safely observed recovery. In the dedicated
+  `RepositoryReport { state: "not-inspected", diagnostic }`;
+  `RegistrationReport { state: "not-inspected", diagnostic }`; false
+  structural/registration/mutation readiness; exact diagnostics; and recovery
+  registration `"not-inspected"`. Inject a registration reader that fails if
+  called and prove its call count remains zero. In the dedicated
   `inspect.path-observation.test.ts`, install hoisted test-local wrappers for
   `node:fs/promises` and the strict CaseHome resource module before dynamically
   importing `inspect.ts`. Prove the exact link entry receives one `lstat`, no
   target path receives `realpath`, `lstat`, `readdir`, or read/open access, the
-  strict opener is never called, and registration inspection still occurs. Do
-  not add an observer field to `InspectGitBackedCaseHomeDependencies` or export
-  any test seam.
+  strict opener is never called. Do not add an observer field to
+  `InspectGitBackedCaseHomeDependencies` or export any test seam.
 
   For Git unavailable with a safely identifiable normal child, assert every
   named field: `classification: "unavailable"`; canonical `paths`; truthful
@@ -308,23 +321,54 @@ YAML, Zod, Vitest, OpenSpec.
   absent/current/different/conflicting-root/invalid registration, and prove
   `absent` is returned only after a successful registry read with no mapping.
 
+  Add a table-driven injected-runner RED for every required Git result. Include
+  absolute Git directory, common directory, bare-state, non-bare top-level,
+  quiet HEAD verification with unexpected stderr, branch, status, committed-root
+  `ls-tree`, upstream, remote list, and each fetch/push `remote get-url`. Each
+  nonzero row must return repository/classification `"unavailable"`, identify
+  that exact command in diagnostics, readiness reasons, and
+  `recovery.repositoryDiagnostic`, preserve only already-observed recovery,
+  execute no later Git command, and never report the failure as absent, unborn,
+  detached, dirty, no-upstream, untracked root, no-remote, or empty URL.
+
+  Separately prove only the recognized `LC_ALL=C` no-repository result with no
+  exact `.git` entry yields absent/non-Git, and only
+  `rev-parse --verify --quiet HEAD` with the expected empty-output miss yields
+  unborn. Use `branch --show-current` and a branch-ref upstream query that return
+  success with empty output to prove detached/no-upstream. Prove a bare result
+  skips top-level inspection rather than treating its inapplicable failure as
+  unavailable.
+
+  In `git.test.ts`, exercise `createGitRunner()` without a public environment
+  seam. Build distinguishable repositories A and B, then run A with ambient
+  `GIT_DIR=B`, `GIT_WORK_TREE=A`, `GIT_INDEX_FILE=B`, `GIT_COMMON_DIR`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`,
+  ref/config overrides, and hostile global/system configuration pointing to B.
+  Also set an arbitrary trace-producing `GIT_*` proof value. Prove the report
+  contains only A's root/common dir/index/object/ref/branch/dirty/tracked-root/
+  remote facts, the trace artifact is absent, and B cannot masquerade as or
+  alter A. Prove `PATH` remains usable and the child Git environment gets only
+  intentional `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`,
+  `GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C` after all ambient `GIT_*` values
+  are removed. Keep environment setup sequential and restore the process
+  environment in `finally`.
+
 - [ ] **Step 4: Run inspection tests and record RED**
 
   ```bash
   npm test -- \
     src/resources/casehome-storage/casehome-resources.test.ts \
     src/resources/casehome-storage/casehome-resources.path-observation.test.ts \
+    src/casehomes/git-backed-casehome/git.test.ts \
     src/casehomes/git-backed-casehome/inspect.test.ts \
     src/casehomes/git-backed-casehome/inspect.path-observation.test.ts
   ```
 
-  Expected: FAIL against the existing boundaries because the snapshot lacks
-  `documentPaths`, recovery omits transitive document paths, inspection does not
-  disable optional Git locks, conflicting registrations remain eligible, and
-  early exits lack the exact not-inspected variants, skip independent
-  registration, and skip safe resource inspection when only Git is unavailable.
-  The original missing-boundary RED remains historical evidence only in
-  `task-2-report.md`.
+  Expected: FAIL against the delivered Task 2 boundary because required command
+  failures collapse into false ordinary state, symlink/non-directory rejection
+  still invokes strict registration, and the default runner inherits ambient
+  Git selectors/configuration. The original missing-boundary and recovery REDs
+  remain historical evidence only in `task-2-report.md`.
 
 - [ ] **Step 5: Implement the direct Git runner and exact inspection**
 
@@ -336,22 +380,36 @@ YAML, Zod, Vitest, OpenSpec.
   visibly order UID-derived path segments. Copy those paths into recovery
   exactly once.
 
-  Use `execFileResult("git", args, { cwd })`; never use a shell command. Disable
-  optional locks for every repository-inspection Git invocation. Derive the
-  exact child without recursively scanning, reject symlink identity before
-  following it, compare real paths to Git's `--show-toplevel`, report an
+  Use `execFileResult("git", args, { cwd, env })`; never use a shell command.
+  Build `env` by copying required non-Git process values, deleting every key
+  beginning `GIT_`, then setting only `GIT_OPTIONAL_LOCKS=0`,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=os.devNull`, and `LC_ALL=C`.
+  Retain explicit no-optional-lock command arguments. Do not add a public
+  environment/test seam.
+
+  Replace generic undefined/false/empty fallbacks with command-specific result
+  classification. Recognize only the sanitized no-repository discovery state
+  and quiet expected HEAD miss; use successful-empty branch/upstream commands,
+  and inspect bare state before top-level. Any other required nonzero result
+  returns unavailable with command/exit/stderr context, false readiness, bounded
+  recovery carrying the same `repositoryDiagnostic`, and no later Git call or
+  inferred fact.
+
+  Derive the exact child without recursively scanning, reject symlink identity
+  before following it, compare real paths to Git's `--show-toplevel`, report an
   inherited outer root as non-primary, and reject every `.git` file regardless
   of whether it names a linked worktree, separate Git directory, or submodule.
   Read Git/remotes through explicit non-mutating commands. Load resources only
   through `openCaseHomeResources` and registration only through Task 1. Treat
-  different and conflicting-root registration as ineligible. Add the exact
-  resource/repository not-inspected variants for child-identity failures, but
-  always inspect independent registration. When Git alone is unavailable,
-  inspect a safely identifiable child's strict resources and registration and
-  mark only the repository unavailable. Populate every named public report
-  field and inventory only safely observed entries; never read a symlink target.
-  Freeze copied arrays and nested report values. Export inspection from the
-  package entry point without changing `src/cli.ts` or entering Task 3.
+  different and conflicting-root registration as ineligible. For symlink or
+  non-directory identity failure, return resource, repository, and registration
+  not inspected without calling the strict registry reader. When Git alone is
+  unavailable, inspect a safely identifiable child's strict resources and
+  registration and mark only the repository unavailable. Populate every named
+  public report field and inventory only safely observed entries; never read a
+  rejected child target. Freeze copied arrays and nested report values. Export
+  inspection from the package entry point without changing `src/cli.ts` or
+  entering Task 3.
 
 - [ ] **Step 6: Prove current inspection import and CLI boundaries**
 
@@ -387,8 +445,19 @@ YAML, Zod, Vitest, OpenSpec.
   disabling from inspection; require the stale-stat raw-index witness to fail.
   Feed the command audit
   `['--no-optional-locks', 'remote', 'add', 'origin', 'forbidden']` and require
-  the normalized forbidden-command witness to fail. Restore production after
-  every mutation and rerun the complete focused GREEN.
+  the normalized forbidden-command witness to fail.
+
+  Mutation-proof the new failure matrix separately: temporarily convert an
+  absolute-Git-directory failure to absent, a status failure to dirty, an
+  unexpected HEAD failure to unborn, and a remote/get-url failure to no
+  remote/empty URL; each mutation must fail only its matching table row and the
+  no-later-facts assertion. Restore after each. Temporarily call the strict
+  registration reader on a symlink/non-directory exit and require the
+  registration-zero-call and target-zero-access witnesses to fail. Finally pass
+  ambient `process.env` unchanged and require the A/B, hostile-config, and
+  trace-artifact isolation witnesses to fail while the ordinary clean-environment
+  case remains green. Restore production after every mutation and rerun the
+  complete focused GREEN.
 
 - [ ] **Step 8: Mark tasks 2.1 and 2.2 complete, commit, and push**
 
@@ -397,11 +466,12 @@ YAML, Zod, Vitest, OpenSpec.
     src/resources/casehome-storage/casehome-resources.test.ts \
     src/resources/casehome-storage/casehome-resources.path-observation.test.ts \
     src/casehomes/git-backed-casehome/git.ts \
+    src/casehomes/git-backed-casehome/git.test.ts \
     src/casehomes/git-backed-casehome/inspect.ts \
     src/casehomes/git-backed-casehome/inspect.test.ts \
     src/casehomes/git-backed-casehome/inspect.path-observation.test.ts \
     openspec/changes/initialize-git-backed-casehomes/tasks.md
-  git commit -m "feat(casehomes): expose read-only recovery inventory"
+  git commit -m "fix(casehomes): require exact Git inspection state"
   git push
   ```
 
