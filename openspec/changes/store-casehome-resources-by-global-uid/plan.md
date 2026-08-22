@@ -183,7 +183,10 @@ OpenSpec.
   containing UID B, a second `<casehome>/<root-uid>/root.yaml` claiming the Case
   root UID, malformed YAML, unknown kind, and a strict schema failure. Assert
   diagnostics include the UID/path or expected-versus-actual identity required
-  to locate the defect.
+  to locate the defect. Add cases where a referenced UID directory points to an
+  external folder and where a contained UID directory's `root.yaml` points to
+  an external document; prove neither external document reaches registry
+  inspection.
 
 - [ ] **Step 2: Add failing owned-path tests**
 
@@ -218,6 +221,9 @@ OpenSpec.
   - reject a second authoritative document at
     `<casehome>/<root-uid>/root.yaml` without scanning directories;
   - preserve reader validation context from the canonical path;
+  - establish real CaseHome containment for every existing segment of each
+    known root, duplicate-root, and reachable non-root document path before
+    resource inspection, rejecting UID-directory and document symlink escapes;
   - validate owned paths as non-empty, non-absolute, segment-safe file paths
     below `files/` or `audits/`, rejecting either bare directory;
   - verify lexical containment and realpath containment for every existing path

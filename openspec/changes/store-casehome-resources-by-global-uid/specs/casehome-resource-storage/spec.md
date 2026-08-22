@@ -6,7 +6,11 @@ The system SHALL read the CaseHome root resource only from
 `<casehome>/root.yaml` and SHALL read each non-root resource only from
 `<casehome>/<resource-uid>/root.yaml`. The non-root folder name MUST equal the
 validated resource's `metadata.uid`, and the system MUST NOT create or depend on
-`nodes/`, `edges/`, or kind-specific storage trees.
+`nodes/`, `edges/`, or kind-specific storage trees. Every reachable resource
+document path MUST remain inside the real CaseHome after resolving every
+existing symlink segment. A resource document that resolves outside the real
+CaseHome MUST be rejected before its contents are inspected and without
+returning a snapshot.
 
 #### Scenario: Root and non-root resources use canonical locations
 
@@ -39,6 +43,23 @@ validated resource's `metadata.uid`, and the system MUST NOT create or depend on
 - **WHEN** the Case root references UID A
 - **AND** `<casehome>/<UID-A>/root.yaml` validates with `metadata.uid` UID B
 - **THEN** opening fails with an error identifying the expected and actual UIDs
+
+#### Scenario: Referenced UID directory symlink escape is rejected
+
+- **WHEN** a Case root references UID A
+- **AND** `<casehome>/<UID-A>` is a symlink to a directory outside the real
+  CaseHome
+- **THEN** opening fails before the external `root.yaml` contents are inspected
+- **THEN** opening does not return a snapshot
+
+#### Scenario: Referenced resource document symlink escape is rejected
+
+- **WHEN** a Case root references UID A
+- **AND** `<casehome>/<UID-A>` is contained inside the real CaseHome
+- **AND** `<casehome>/<UID-A>/root.yaml` is a symlink to a document outside the
+  real CaseHome
+- **THEN** opening fails before the external document contents are inspected
+- **THEN** opening does not return a snapshot
 
 ### Requirement: Discover Exact Rooted Membership
 

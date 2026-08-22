@@ -72,6 +72,12 @@ unreferenced path traversal.
 ### Validate canonical paths and owned containment
 
 After reading a non-root document, its `metadata.uid` must equal the folder UID.
+Before reading any root, duplicate-root, or reachable non-root resource
+document, every existing segment of its canonical path is resolved against the
+real CaseHome. A UID directory or `root.yaml` symlink that resolves outside the
+real CaseHome fails before the external document reaches resource inspection.
+This check follows only the exact known resource paths and does not scan.
+
 Owned paths returned by the kind definition must be non-empty relative file
 paths below `files/` or `audits/`; the bare directory names, absolute paths, and
 any `..` segment fail. Lexical containment is always checked. Every existing
