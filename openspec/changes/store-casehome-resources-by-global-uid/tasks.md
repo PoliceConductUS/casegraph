@@ -9,10 +9,10 @@
 
 ## 2. Rooted Global-UID Membership
 
-- [ ] 2.1 Add focused failing tests for canonical root and UID-folder loading,
+- [x] 2.1 Add focused failing tests for canonical root and UID-folder loading,
       root/non-root resources, common node/edge resolution, transitive exact
       membership, cycles, and unreferenced resolution refusal.
-- [ ] 2.2 Implement the eager rooted CaseHome snapshot and global-UID resolver,
+- [x] 2.2 Implement the eager rooted CaseHome snapshot and global-UID resolver,
       then make the focused membership tests pass.
 
 ## 3. Storage Rejection And Owned Paths
