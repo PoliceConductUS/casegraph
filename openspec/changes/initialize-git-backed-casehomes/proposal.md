@@ -21,6 +21,8 @@ registration rules.
   registration inspection when a symlink/non-directory child makes target
   dereference unsafe, while retaining independent registration inspection for
   safe normal and Git-unavailable directories.
+- Report bare repositories through a dedicated ineligible shape containing only
+  repository-applicable facts, without running or inventing worktree state.
 - Expose the canonical authoritative document paths already opened by the
   strict rooted-resource snapshot and use them in recovery reporting without a
   second read or directory scan.

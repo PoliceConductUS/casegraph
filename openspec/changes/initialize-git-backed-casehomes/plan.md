@@ -214,6 +214,11 @@ YAML, Zod, Vitest, OpenSpec.
   `{ state: "not-inspected"; diagnostic: string }` and `RepositoryReport` with
   that exact identity-failure variant while retaining
   `{ state: "unavailable"; diagnostic: string }` for Git failure.
+- Modifies: `RepositoryReport` with the dedicated bare variant
+  `{ state: "ineligible"; reason: "bare"; bare: true; gitDirectory: string; commonDirectory: string; commit?: string; unborn: boolean; branch?: string; detached: boolean; upstream?: string; remotes: readonly GitRemoteReport[] }`;
+  it does not intersect worktree details and therefore has no `topLevel`,
+  `dirty`, `rootTrackedInHead`, `expectedTopLevel`, `gitFile`, or other
+  worktree-only field.
 - Modifies: `RegistrationReport` with exact
   `{ state: "not-inspected"; diagnostic: string }` used only when rejected child
   identity makes strict registry validation unsafe.
@@ -292,7 +297,8 @@ YAML, Zod, Vitest, OpenSpec.
 - [ ] **Step 3: Write failing conflict tests**
 
   Cover a non-directory child, symlinked `casegraph`, existing mismatched
-  top-level, bare repository, and three separate `.git`-file fixtures: linked
+  top-level, committed and unborn bare repositories, and three separate
+  `.git`-file fixtures: linked
   worktree, `--separate-git-dir`, and submodule. Cover missing Git executable,
   missing or invalid strict root, and rooted resource-storage failure. Assert
   expected Git root/directory/common-directory paths appear where applicable.
@@ -353,8 +359,21 @@ YAML, Zod, Vitest, OpenSpec.
   empty trimmed stdout/stderr; vary each element and require unavailable. Use
   `branch --show-current` and an exact branch `for-each-ref` upstream query that
   return exit-zero empty output to prove detached/no-upstream without nonzero
-  fallback. Prove a bare result skips top-level inspection and every command it
-  does execute succeeds.
+  fallback. Prove a bare result skips worktree inspection and every command it
+  does execute, except the exact quiet-HEAD unborn tuple, succeeds.
+
+  For committed and unborn bare fixtures, assert `classification: "conflict"`
+  and the exact dedicated repository object. Require canonical Git/common
+  directories, commit iff committed, unborn, branch/detached, upstream only from
+  the successful ref query, and complete remotes. Assert with property-absence
+  checks that `topLevel`, `dirty`, `rootTrackedInHead`, `expectedTopLevel`,
+  `gitFile`, and every other worktree-only field are absent. Record complete Git
+  arrays and require no show-toplevel, status, or `ls-tree` command. Assert
+  registration eligibility and mutation readiness false for the exact bare
+  reason, known structural/recovery remote unions after successful queries, and
+  exact recovery commit presence/absence. Inject remote-name, fetch-URL, and
+  push-URL failures separately; each must discard partial remotes and return
+  repository/structural/recovery unavailable without invoking worktree commands.
 
   For every identity, Git-unavailable, and required-command-failure row, assert
   the exact `structuralPushTarget` and `recovery.remotes` discriminants and
@@ -402,8 +421,9 @@ YAML, Zod, Vitest, OpenSpec.
   failures collapse into false ordinary state, the permitted nonzero tuples are
   not exact, structural/recovery remote failure states still use empty arrays,
   remote enumeration exposes partial results, symlink/non-directory rejection
-  still invokes strict registration, and the default runner inherits ambient
-  Git selectors/configuration including mixed-case keys. The original
+  still invokes strict registration, the bare variant computes worktree-only
+  fields and commands, and the default runner inherits ambient Git
+  selectors/configuration including mixed-case keys. The original
   missing-boundary and recovery REDs remain historical evidence only in
   `task-2-report.md`.
 
@@ -433,10 +453,13 @@ YAML, Zod, Vitest, OpenSpec.
   `fatal: not a git repository`. Recognize unborn only for
   `rev-parse --verify --quiet HEAD`, exit `1`, and empty trimmed stdout/stderr.
   Use exit-zero empty `branch --show-current` and branch `for-each-ref` upstream
-  queries, and inspect bare state before skipping its inapplicable top-level
-  query. Any tuple mismatch or other required nonzero result returns unavailable
-  with command/exit/stderr context, false readiness, bounded recovery carrying
-  the same `repositoryDiagnostic`, and no later Git call or inferred fact.
+  queries. Inspect bare state before worktree commands. For bare repositories,
+  skip show-toplevel, status, and committed-root `ls-tree`; populate only the
+  dedicated ineligible-bare repository fields and classify the enclosing report
+  as conflict. Any tuple mismatch or other required nonzero result returns
+  unavailable with command/exit/stderr context, false readiness, bounded
+  recovery carrying the same `repositoryDiagnostic`, and no later Git call or
+  inferred fact.
 
   Implement the exact structural push-target and recovery-remotes discriminated
   unions from the interface section. Identity conflicts use not-inspected;
@@ -447,10 +470,16 @@ YAML, Zod, Vitest, OpenSpec.
   all partial remote data and makes repository, structural push target, and
   recovery remote inventory unavailable with one diagnostic.
 
-  Derive the exact child without recursively scanning, reject symlink identity
-  before following it, compare real paths to Git's `--show-toplevel`, report an
-  inherited outer root as non-primary, and reject every `.git` file regardless
-  of whether it names a linked worktree, separate Git directory, or submodule.
+  For a successfully inspected bare repository, keep structural push target and
+  recovery remotes known from the complete remote inventory while setting
+  registration eligibility and mutation readiness false for the bare reason.
+  Copy the commit into recovery only when committed; omit it when unborn.
+
+  Derive the exact child without recursively scanning and reject symlink
+  identity before following it. For a non-bare worktree candidate, compare real
+  paths to Git's `--show-toplevel` and report an inherited outer root as
+  non-primary. Reject every `.git` file regardless of whether it names a linked
+  worktree, separate Git directory, or submodule.
   Read Git/remotes through explicit non-mutating commands. Load resources only
   through `openCaseHomeResources` and registration only through Task 1. Treat
   different and conflicting-root registration as ineligible. For symlink or
@@ -507,7 +536,12 @@ YAML, Zod, Vitest, OpenSpec.
   member, add `pushUrls: []` or `remotes: []` to failure variants, and publish a
   partial first remote before a later URL failure; each mutation must fail only
   its exact tuple, property-absence, or atomic-enumeration witness. Restore after
-  each. Temporarily call the strict
+  each. Temporarily run show-toplevel, status, or `ls-tree` for bare fixtures;
+  require only the matching forbidden-command witness to fail. Separately add
+  one worktree-only property to the bare report and require only its
+  property-absence witness to fail; then collapse a bare remote failure into the
+  ineligible variant and require the unavailable/atomic witness to fail. Restore
+  after each. Temporarily call the strict
   registration reader on a symlink/non-directory exit and require the
   registration-zero-call and target-zero-access witnesses to fail. Finally pass
   ambient `process.env` unchanged and require the A/B, hostile-config,

@@ -123,15 +123,16 @@ may mean unborn only for exit `1` with empty trimmed stdout and stderr. Any tupl
 mismatch is unavailable. `branch --show-current` and a branch `for-each-ref`
 upstream query represent detached/no-upstream through exit-zero empty output.
 Bare state is established before and skips the inapplicable top-level query;
-every executed command must still succeed. Status, absolute Git directory,
-common directory, bare-state, required non-bare top-level, committed-root
-`ls-tree`, remote list, and configured fetch/push URL failures never become
-dirty, absent, untracked, or empty values.
+inspection also skips status and committed-root `ls-tree` for bare repositories,
+and every executed command except the exact quiet-HEAD unborn tuple must still
+succeed. Status, absolute Git directory, common directory, bare-state, required
+non-bare top-level, committed-root `ls-tree`, remote list, and configured
+fetch/push URL failures never become dirty, absent, untracked, or empty values.
 
-Successful inspection reports the Git top-level, Git directory, common
-directory, branch or detached state, unborn or committed state, dirty state,
-every remote name, and every configured fetch and effective push URL. It also
-reports whether `root.yaml` is tracked in `HEAD`. Structural push-target
+Successful non-bare worktree inspection reports the Git top-level, Git
+directory, common directory, branch or detached state, unborn or committed
+state, dirty state, every remote name, and every configured fetch and effective
+push URL. It also reports whether `root.yaml` is tracked in `HEAD`. Structural push-target
 readiness means a caller-selected remote exists and
 `git remote get-url --push` returns a nonempty URL. It does not claim network,
 authentication, authorization, or server writability; only `git push` can prove
@@ -152,6 +153,18 @@ Remote enumeration publishes atomically into the report. Any remote-name,
 fetch-URL, or push-URL command failure discards all partial results and makes
 repository, structural push target, and recovery remote inventory unavailable
 with the same diagnostic.
+
+A bare repository has a dedicated `RepositoryReport` variant with state
+`"ineligible"`, reason `"bare"`, `bare: true`, canonical Git/common directories,
+commit-or-unborn state, branch-or-detached state, optional upstream obtained
+only from the exit-zero ref query, and a complete remote inventory. It omits
+top-level, dirty, tracked-root, expected-top-level, gitfile, and every other
+worktree-only field. Its enclosing classification is `"conflict"`; registration
+eligibility and mutation readiness are false for the bare reason. Successful
+remote queries give structural push and recovery remote known states, while any
+remote failure atomically makes repository, structural push, and recovery remote
+state unavailable. Recovery includes the exact commit only when committed and
+the exact known remote inventory.
 
 Every report includes `classification`, `paths`, `resource`, `repository`,
 `registration`, `structuralPushTarget`, `registrationEligibility`,

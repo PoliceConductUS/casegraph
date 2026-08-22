@@ -28,7 +28,8 @@
       exact allowed nonzero result tuples, discriminated push-target and recovery
       remote states with atomic remote enumeration, command-specific unavailable
       failures without later false facts, case-insensitively sanitized ambient
-      Git selectors/configuration with real PATH preservation, and raw byte/ref
+      Git selectors/configuration with real PATH preservation, a dedicated bare
+      ineligible report with no worktree commands or fields, and raw byte/ref
       immutability.
 - [ ] 2.2 Implement the smallest snapshot and exact read-only inspection
       corrections through injectable Git and registration boundaries, then make

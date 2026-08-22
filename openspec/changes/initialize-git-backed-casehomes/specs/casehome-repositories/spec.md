@@ -106,6 +106,12 @@ include `{ state: "not-inspected"; diagnostic: string }` for a symlink or
 non-directory exact child whose zero-target-access rejection prevents safe
 strict registration inspection.
 
+`RepositoryReport` MUST include the dedicated bare variant
+`{ state: "ineligible"; reason: "bare"; bare: true; gitDirectory: string; commonDirectory: string; commit?: string; unborn: boolean; branch?: string; detached: boolean; upstream?: string; remotes: readonly GitRemoteReport[] }`.
+This variant MUST contain only repository-applicable facts and MUST NOT contain
+`topLevel`, `dirty`, `rootTrackedInHead`, `expectedTopLevel`, `gitFile`, or any
+other worktree-only field.
+
 `structuralPushTarget` MUST be exactly one of:
 
 - `{ state: "known"; ready: boolean; remote?: string; pushUrls: readonly string[]; provesWritability: false }`;
@@ -177,8 +183,9 @@ inspection MUST use `branch --show-current`, and upstream inspection MUST use a
 `for-each-ref` query, so those commands return exit zero with empty output for
 detached and no-upstream state respectively. A bare repository MUST be
 identified before top-level inspection and MUST skip an inapplicable top-level
-query, but every Git command that is executed for a bare repository MUST
-succeed. No other nonzero result may be interpreted as ordinary absence.
+query; except for the exact quiet-HEAD unborn tuple, every Git command executed
+for a bare repository MUST succeed. No other nonzero result may be interpreted
+as ordinary absence.
 
 #### Scenario: Required command failures do not become ordinary state
 
@@ -228,11 +235,49 @@ succeed. No other nonzero result may be interpreted as ordinary absence.
 - **THEN** inspection reports no upstream
 - **THEN** neither state accepts a nonzero fallback
 
-#### Scenario: Bare repositories skip only the inapplicable query
+#### Scenario: Bare repositories skip worktree-only queries
 
 - **WHEN** successful bare-state inspection establishes a bare repository
-- **THEN** inspection skips the inapplicable top-level query
-- **THEN** every Git command it does execute MUST return success
+- **THEN** inspection does not invoke `rev-parse --show-toplevel`, any `status`,
+  or any `ls-tree` command
+- **THEN** except for the exact permitted quiet-HEAD unborn tuple, every Git
+  command it does execute MUST return success
+
+#### Scenario: Bare repository has an exact ineligible report
+
+- **WHEN** bare-state, Git-directory, common-directory, branch, upstream, and
+  every remote query succeed for a bare repository
+- **AND** HEAD inspection either succeeds with a commit or returns the exact
+  permitted quiet-HEAD unborn tuple
+- **THEN** `classification` is `"conflict"`
+- **THEN** `repository` is the dedicated ineligible-bare variant containing
+  exactly `state: "ineligible"`, `reason: "bare"`, `bare: true`, canonical
+  `gitDirectory` and `commonDirectory`, `commit` when committed, `unborn`,
+  `branch` when present, `detached`, `upstream` only when the exit-zero ref query
+  returned one, and the complete remote inventory
+- **THEN** `repository` does not contain `topLevel`, `dirty`,
+  `rootTrackedInHead`, `expectedTopLevel`, `gitFile`, or another worktree-only
+  field
+- **THEN** registration eligibility and mutation readiness are false with the
+  exact bare-repository reason
+- **THEN** `structuralPushTarget` is the known variant derived from the complete
+  remote inventory and still has `provesWritability: false`
+- **THEN** `recovery.remotes` is the known variant containing that same complete
+  remote inventory
+- **THEN** recovery contains the exact commit only when the bare repository is
+  committed and contains no commit when it is unborn
+
+#### Scenario: Bare remote failure remains unavailable and atomic
+
+- **WHEN** any remote-name, fetch-URL, or push-URL query fails while inspecting
+  a bare repository
+- **THEN** repository state and classification are unavailable with that
+  command diagnostic rather than ineligible-bare
+- **THEN** `structuralPushTarget` and `recovery.remotes` are unavailable with
+  the same diagnostic and contain no partial or empty arrays
+- **THEN** registration eligibility and mutation readiness are false with the
+  command-failure reason
+- **THEN** no worktree-only command is invoked before or after the failure
 
 #### Scenario: Failure table stops before later false facts
 
