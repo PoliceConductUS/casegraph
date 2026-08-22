@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  inspectResourceDocument,
   readResourceDocument,
   writeResourceDocument,
 } from "./resource-document.js";
@@ -11,14 +12,15 @@ const validCase = {
   apiVersion: "casegraph.policeconduct.org/v1alpha1",
   kind: "Case",
   metadata: { uid: "tz4a98xxat96iws9zmbrgj3a" },
-  spec: {},
+  spec: { resources: [] },
 } as const;
 
 const validCaseYaml = `apiVersion: casegraph.policeconduct.org/v1alpha1
 kind: Case
 metadata:
   uid: tz4a98xxat96iws9zmbrgj3a
-spec: {}
+spec:
+  resources: []
 `;
 
 async function temporaryDirectory(): Promise<string> {
@@ -26,6 +28,24 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 describe("CaseGraph resource documents", () => {
+  test("inspects valid Case YAML from root.yaml in one registry operation", async () => {
+    const directory = await temporaryDirectory();
+    const rootPath = join(directory, "root.yaml");
+
+    try {
+      await writeFile(rootPath, validCaseYaml);
+
+      await expect(inspectResourceDocument(rootPath)).resolves.toEqual({
+        resource: validCase,
+        category: "node",
+        resourceReferences: [],
+        ownedPaths: [],
+      });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("reads valid Case YAML from root.yaml", async () => {
     const directory = await temporaryDirectory();
     const rootPath = join(directory, "root.yaml");

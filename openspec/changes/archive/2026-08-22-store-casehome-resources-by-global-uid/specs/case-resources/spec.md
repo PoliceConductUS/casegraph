@@ -1,10 +1,4 @@
-# case-resources Specification
-
-## Purpose
-
-TBD - created by archiving change enforce-strict-resource-envelopes. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Select One Strict Kind-Specific Resource Contract
 
@@ -86,81 +80,7 @@ fields placed in the wrong envelope section.
   `metadata.uid`
 - **THEN** strict validation fails
 
-### Requirement: Use One Global Resource UID Namespace
-
-The system MUST validate every `metadata.uid` as a CUID2, MUST use the same UID
-type for nodes and legal-effect edges, and MUST reject duplicate UIDs without
-creating kind-specific namespaces.
-
-#### Scenario: Valid resource UID is accepted
-
-- **WHEN** `metadata.uid` is the valid CUID2
-  `tz4a98xxat96iws9zmbrgj3a`
-- **THEN** resource UID validation succeeds
-
-#### Scenario: Invalid resource UID is rejected
-
-- **WHEN** `metadata.uid` is missing, empty, or not a valid CUID2
-- **THEN** resource validation fails
-
-#### Scenario: Duplicate resource UID is rejected across kinds
-
-- **WHEN** two validated resources of the same or different kinds use the same
-  `metadata.uid`
-- **THEN** uniqueness validation fails and identifies the duplicate UID
-
-### Requirement: Represent Resource References With Only The Resource UID
-
-The system SHALL parse a resource reference through the same global UID
-contract as `metadata.uid` and SHALL NOT require a case ID, node/edge
-discriminator, resource kind, or filesystem path.
-
-#### Scenario: UID-only reference is accepted
-
-- **WHEN** a resource reference is the valid CUID2 string
-  `tz4a98xxat96iws9zmbrgj3a`
-- **THEN** reference validation succeeds without any other identity field
-
-#### Scenario: Composite or path reference is rejected
-
-- **WHEN** a resource reference is an object containing a case ID, kind, or
-  filesystem path instead of one CUID2 string
-- **THEN** reference validation fails
-
-### Requirement: Create Deterministic Round-Trippable Resource YAML
-
-Each registered writer SHALL validate its resource before creating the target,
-SHALL produce deterministic YAML, and SHALL produce a document that the same
-registered reader accepts without information loss. The writer MUST NOT
-overwrite an existing resource.
-
-#### Scenario: Valid Case resource round-trips
-
-- **WHEN** the `Case` writer receives a valid foundation-layer `Case` resource
-  and an available target path
-- **THEN** it creates deterministic YAML at that path
-- **THEN** the `Case` reader returns the same validated resource
-
-#### Scenario: Repeated serialization is byte-identical
-
-- **WHEN** the same valid resource value is serialized more than once
-- **THEN** every serialization result is byte-identical
-
-#### Scenario: Invalid resource does not create a file
-
-- **WHEN** a writer receives a resource that fails the selected kind schema
-- **THEN** writing fails before the target file is created
-
-#### Scenario: Existing resource is not overwritten
-
-- **WHEN** a resource file already exists at the requested target path
-- **AND** a writer is asked to write a resource with the same or a different UID
-- **THEN** writing fails and the existing bytes remain unchanged
-
-#### Scenario: Malformed YAML is rejected at the reader boundary
-
-- **WHEN** a reader receives malformed YAML
-- **THEN** reading fails with an error identifying the resource path
+## ADDED Requirements
 
 ### Requirement: Declare Resource Storage Semantics By Kind
 
