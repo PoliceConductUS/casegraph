@@ -53,18 +53,15 @@ YAML, Zod, Vitest, OpenSpec.
 - Consumes: `caseId` already validated as canonical by the Issue #45 caller;
   this boundary does not add another case-identity parser or normalization.
 
-- [ ] **Step 1: Write strict registration parser tests**
+- [ ] **Step 1: Extend strict registration classification tests**
 
-  Create cases for an absent file yielding an empty immutable mapping and for
-  rejection of malformed YAML, a sequence/scalar root, duplicate keys,
-  non-string keys or values, missing targets, non-real/symlinked stored paths,
-  values that are not absolute paths ending in `casegraph/root.yaml`, and an
-  existing mapping that assigns one real root to multiple IDs. Assert every
-  diagnostic identifies `<config-home>/casehomes.yaml`. Prove absence means
-  `lstat` found no directory entry; valid and dangling symlinks, directories,
-  and another non-regular entry at that exact path are rejected unchanged rather
-  than treated as absent. Prove each canonical stored root target is a regular
-  file and reject a directory, device, or other non-regular target.
+  Retain the existing parser and immutability coverage. Add cases proving absence
+  means `lstat` found no directory entry; valid and dangling symlinks,
+  directories, and another non-regular entry at that exact path are rejected
+  unchanged rather than treated as absent. Prove each canonical stored root
+  target is a regular file and reject a directory, device, or other non-regular
+  target. Assert every diagnostic identifies
+  `<config-home>/casehomes.yaml` and the rejected entry or target type.
 
 - [ ] **Step 2: Run registration tests and record RED**
 
@@ -72,7 +69,10 @@ YAML, Zod, Vitest, OpenSpec.
   npm test -- src/casehomes/git-backed-casehome/registration.test.ts
   ```
 
-  Expected: FAIL because the registration module does not exist.
+  Expected: FAIL with the existing registration module because the new
+  registry-entry cases expose missing `lstat`/type classification and the new
+  canonical-root cases expose missing regular-file classification. The original
+  missing-module RED remains historical evidence only in `task-1-report.md`.
 
 - [ ] **Step 3: Implement read-only strict registration loading**
 
@@ -114,7 +114,11 @@ YAML, Zod, Vitest, OpenSpec.
   failure, and pre-rename publisher failure. Inject guard cleanup failure before
   and after registry publication and prove the diagnostic reports the retained
   guard path plus whether publication occurred, without speculative deletion or
-  recovery. Prove a contender never removes the holder's guard.
+  recovery. Inject validation failure plus cleanup failure and publication
+  failure plus cleanup failure separately; prove each result retains the exact
+  primary diagnostic, separately reports the cleanup diagnostic and guard path,
+  identifies exact publication state, and returns no false success. Prove a
+  contender never removes the holder's guard.
 
 - [ ] **Step 6: Run the tests and confirm the new registration cases fail**
 
@@ -141,7 +145,9 @@ YAML, Zod, Vitest, OpenSpec.
   Remove the owned guard after success and after error. If removal fails, report
   the retained guard path and whether publication occurred; do not retry, use a
   fallback, delete other state, or claim clean completion. Never remove a guard
-  this operation did not acquire.
+  this operation did not acquire. When validation/publication and cleanup both
+  fail, preserve the primary diagnostic and add the cleanup diagnostic, retained
+  guard path, and exact publication state without masking either failure.
 
 - [ ] **Step 8: Run registration tests and record GREEN**
 
@@ -534,8 +540,9 @@ YAML, Zod, Vitest, OpenSpec.
   configured-push-versus-writability limitation, and the Task 1 review
   deviation: atomic rename alone did not serialize the snapshot transaction.
   Verification MUST cite the independent-process contention witness, mode and
-  non-regular-entry cases, and cleanup-failure retained-state assertions before
-  Task 1 or the change may be accepted.
+  non-regular-entry cases, cleanup-failure retained-state assertions, and dual
+  primary-plus-cleanup diagnostic assertions before Task 1 or the change may be
+  accepted.
 
 - [ ] **Step 5: Mark task 5.2 complete and rerun verification**
 

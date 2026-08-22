@@ -185,6 +185,13 @@ for the same ID fails before publication. The inverse is also unique: a root
 already mapped from one canonical ID cannot be mapped from a second canonical
 ID. No alias or default is inferred.
 
+Cleanup is a second failure boundary, not a replacement diagnostic. If
+validation or publication fails and owned-guard removal also fails, the returned
+failure preserves the original validation/publication diagnostic and separately
+reports the cleanup diagnostic, retained guard path, and exact publication
+state. Neither error masks the other, and the operation cannot report
+`"created"`, `"unchanged"`, or clean completion.
+
 ### Keep the legacy transition explicit and temporary
 
 The new Issue #42 package imports only `src/resources/**`, the existing generic

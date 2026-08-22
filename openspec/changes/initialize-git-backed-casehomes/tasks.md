@@ -5,8 +5,8 @@
       ID/path pairs, inverse root/ID conflicts, malformed mappings, unchanged
       bytes on every rejection, regular registry/root entries, new `0600` and
       replacement-mode preservation, inter-process guard contention and latest
-      snapshot serialization, guard cleanup outcomes, and exclusive atomic
-      publication without retry.
+      snapshot serialization, guard cleanup outcomes, dual primary-plus-cleanup
+      diagnostic preservation, and exclusive atomic publication without retry.
 - [ ] 1.2 Implement the smallest injectable registration boundary and make the
       focused tests pass without changing unrelated CaseHome behavior.
 
@@ -50,5 +50,6 @@
       then resolve every failure within this change's scope.
 - [ ] 5.2 Verify Issue #42 acceptance-criteria coverage, complete the OpenSpec
       verification and retrospective artifacts including the Task 1
-      inter-process, entry-type, permission, and guard-cleanup evidence, and
-      archive the accepted change before marking the draft pull request ready.
+      inter-process, entry-type, permission, guard-cleanup, and compound-failure
+      evidence, and archive the accepted change before marking the draft pull
+      request ready.

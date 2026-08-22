@@ -421,6 +421,25 @@ or fallback publication.
 - **THEN** the system does not retry, delete other state, use a fallback, or
   claim clean completion
 
+### Requirement: Preserve Compound Registration Failures
+
+The system MUST preserve compound registration failures. When validation or
+publication fails and removal of the acquired registration guard also fails, it
+MUST report both the original primary diagnostic and the guard-cleanup diagnostic
+without masking either one, together with the retained guard path and exact
+registry-publication state.
+
+#### Scenario: Primary and cleanup failures are both reported
+
+- **WHEN** a registration operation fails during validation or publication
+- **AND** removal of its acquired `casehomes.yaml.lock` also fails
+- **THEN** the result reports the original validation or publication diagnostic
+- **THEN** the result separately reports the guard-cleanup diagnostic and
+  retained guard path
+- **THEN** the result identifies whether `casehomes.yaml` was published
+- **THEN** neither failure masks the other and the operation does not report
+  `"created"`, `"unchanged"`, or clean completion
+
 ### Requirement: Preserve Explicit Recovery State
 
 The system MUST preserve and report filesystem and Git state after every failed
@@ -491,7 +510,10 @@ configuration, provider/remote configuration, or migration behavior.
 #### Scenario: No adjacent architecture is added
 
 - **WHEN** Issue #42 is implemented
-- **THEN** it adds no portable `config.yaml`, aliases, defaults, operation
-  worktrees, hosting, infrastructure, migration, or legacy compatibility path
-- **THEN** it may read and atomically write only the machine-local
-  `<config-home>/casehomes.yaml` registration defined by this capability
+- **THEN** it may read and atomically write the machine-local
+  `<config-home>/casehomes.yaml` registration and may exclusively create,
+  remove, or visibly retain on cleanup failure only its ephemeral sibling
+  `casehomes.yaml.lock` guard as defined by this capability
+- **THEN** it adds no other durable configuration or lock artifact, portable
+  `config.yaml`, aliases, defaults, provider artifact, operation worktree,
+  hosting, infrastructure, migration, or legacy compatibility path
