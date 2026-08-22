@@ -35,6 +35,22 @@ branch with its remote. The same transaction boundary applies to graph-mutating
 docket imports and other commands when their OpenSpec contract requires a
 branch.
 
+CaseGraph creates operation worktrees below the registered primary CaseHome at:
+
+```text
+<primary-casehome>/.worktrees/<operation-uid>/
+```
+
+The primary CaseHome repository must ignore `.worktrees/`. CaseGraph must refuse
+to create an operation worktree when that ignore rule is absent. The directory
+is transaction infrastructure: it is not a package, a graph resource, graph
+membership, or a location that resource discovery may traverse.
+
+An operation executes against its linked worktree, but CaseHome search-path and
+package-path resolution remains anchored to the registered primary CaseHome.
+The linked worktree's nested filesystem location must not change the meaning of
+portable relative paths.
+
 Squash merging is compatible with this model. The resulting mainline commit is
 the accepted CaseHome state. CaseGraph does not copy Git parentage into YAML to
 preserve the pre-squash branch shape.
@@ -54,7 +70,6 @@ create numbered report-version folders to duplicate that history.
 This ADR does not define:
 
 - branch names
-- worktree paths
 - pull-request policy
 - the exact Conventional Commit scopes or trailer names
 - whether a command creates one commit or several commits before completion
