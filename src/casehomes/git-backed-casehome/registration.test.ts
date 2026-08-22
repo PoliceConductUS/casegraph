@@ -1,22 +1,27 @@
+import { execFile } from "node:child_process";
 import {
+  chmod,
+  lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
-import {
-  CaseHomeRegistrationStore,
-  publishRegistrationAtomically,
-} from "./registration.js";
+import { CaseHomeRegistrationStore } from "./registration.js";
 
 const temporaryDirectories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(
@@ -52,9 +57,77 @@ async function writeRegistration(
   return registrationPath;
 }
 
+function createObservedGuard() {
+  const state = { acquired: 0, released: 0 };
+  return {
+    state,
+    acquireGuard: async (guardPath: string) => {
+      state.acquired += 1;
+      await writeFile(guardPath, "held\n", { flag: "wx", mode: 0o600 });
+      return {
+        release: async () => {
+          state.released += 1;
+          await unlink(guardPath);
+        },
+      };
+    },
+  };
+}
+
+function retainGuardOnCleanup(cleanupDiagnostic: string) {
+  return async (guardPath: string) => {
+    await writeFile(guardPath, "retained\n", { flag: "wx", mode: 0o600 });
+    return {
+      release: () => Promise.reject(new Error(cleanupDiagnostic)),
+    };
+  };
+}
+
+async function runRegistrationSubprocess(input: {
+  readonly configHome: string;
+  readonly caseId: string;
+  readonly rootPath: string;
+}): Promise<{
+  readonly stderr: string;
+  readonly stdout: string;
+  readonly code: number;
+}> {
+  const moduleUrl = new URL("./registration.ts", import.meta.url).href;
+  const script = `
+    import { CaseHomeRegistrationStore } from ${JSON.stringify(moduleUrl)};
+    try {
+      const result = await new CaseHomeRegistrationStore().register(${JSON.stringify(input)});
+      process.stdout.write(String(result));
+    } catch (error) {
+      process.stderr.write(String(error));
+      process.exitCode = 17;
+    }
+  `;
+  try {
+    const result = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      { cwd: process.cwd() },
+    );
+    return { code: 0, stderr: result.stderr, stdout: result.stdout };
+  } catch (error) {
+    const failure = error as Error & {
+      readonly code: number;
+      readonly stderr: string;
+      readonly stdout: string;
+    };
+    return {
+      code: failure.code,
+      stderr: failure.stderr,
+      stdout: failure.stdout,
+    };
+  }
+}
+
 describe("CaseHome machine registration reads", () => {
   test("returns an immutable empty mapping when casehomes.yaml is absent", async () => {
     const configHome = await temporaryDirectory("casegraph-config-");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
     const registrations = await new CaseHomeRegistrationStore().read(
       configHome,
     );
@@ -63,6 +136,9 @@ describe("CaseHome machine registration reads", () => {
     expect([...registrations]).toEqual([]);
     expect(Object.isFrozen(registrations)).toBe(true);
     expect(Reflect.get(registrations, "set")).toBeUndefined();
+    await expect(lstat(registrationPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("reads exact nonempty entries through an immutable mapping facade", async () => {
@@ -100,6 +176,60 @@ describe("CaseHome machine registration reads", () => {
     expect(Reflect.get(registrations, "set")).toBeUndefined();
     expect(Reflect.get(registrations, "delete")).toBeUndefined();
     expect(Reflect.get(registrations, "clear")).toBeUndefined();
+  });
+
+  test("rejects a valid casehomes.yaml symlink without reading or changing its target", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const targetDirectory = await temporaryDirectory(
+      "casegraph-config-target-",
+    );
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const targetPath = await writeRegistration(
+      targetDirectory,
+      `PoliceConductUS/example: ${rootPath}\n`,
+    );
+    const targetBytes = await readFile(targetPath);
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    await symlink(targetPath, registrationPath);
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: registry entry is a symbolic link, not a regular file`,
+    );
+    await expect(readFile(targetPath)).resolves.toEqual(targetBytes);
+    expect((await lstat(registrationPath)).isSymbolicLink()).toBe(true);
+  });
+
+  test("rejects a dangling casehomes.yaml symlink instead of treating it as absent", async () => {
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const missingTarget = path.join(configHome, "missing.yaml");
+    await symlink(missingTarget, registrationPath);
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: registry entry is a symbolic link, not a regular file`,
+    );
+    expect((await lstat(registrationPath)).isSymbolicLink()).toBe(true);
+    await expect(lstat(missingTarget)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  test("rejects a casehomes.yaml directory unchanged", async () => {
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    await mkdir(registrationPath);
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: registry entry is a directory, not a regular file`,
+    );
+    expect((await lstat(registrationPath)).isDirectory()).toBe(true);
   });
 
   test("rejects malformed YAML with its parser and casehomes.yaml context", async () => {
@@ -242,6 +372,25 @@ describe("CaseHome machine registration reads", () => {
       "PoliceConductUS/alias",
     );
   });
+
+  test("rejects a stored directory named casegraph/root.yaml", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = path.join(directory, "example", "casegraph", "root.yaml");
+    await mkdir(rootPath, { recursive: true });
+    const canonicalRootPath = await realpath(rootPath);
+    const registrationPath = await writeRegistration(
+      configHome,
+      `PoliceConductUS/example: ${canonicalRootPath}\n`,
+    );
+
+    await expect(
+      new CaseHomeRegistrationStore().read(configHome),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: stored root target ${canonicalRootPath} is a directory, not a regular file`,
+    );
+    expect((await stat(canonicalRootPath)).isDirectory()).toBe(true);
+  });
 });
 
 describe("CaseHome machine registration writes", () => {
@@ -295,6 +444,46 @@ describe("CaseHome machine registration writes", () => {
       `PoliceConductUS/alpha: ${alphaRoot}\nPoliceConductUS/middle: ${middleRoot}\nPoliceConductUS/zeta: ${zetaRoot}\n`,
     );
     await expect(readdir(configHome)).resolves.toEqual(["casehomes.yaml"]);
+  });
+
+  test("creates a new casehomes.yaml with exact mode 0600 under a permissive umask", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const previousUmask = process.umask(0);
+
+    try {
+      await new CaseHomeRegistrationStore().register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    expect((await stat(registrationPath)).mode & 0o777).toBe(0o600);
+  });
+
+  test("preserves existing registry permission bits on replacement", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const existingRoot = await createCaseHomeRoot(directory, "existing");
+    const requestedRoot = await createCaseHomeRoot(directory, "requested");
+    const registrationPath = await writeRegistration(
+      configHome,
+      `PoliceConductUS/existing: ${existingRoot}\n`,
+    );
+    await chmod(registrationPath, 0o640);
+
+    await new CaseHomeRegistrationStore().register({
+      configHome,
+      caseId: "PoliceConductUS/requested",
+      rootPath: requestedRoot,
+    });
+
+    expect((await stat(registrationPath)).mode & 0o777).toBe(0o640);
   });
 
   test("returns unchanged without writing for the identical ID and real path", async () => {
@@ -411,6 +600,51 @@ describe("CaseHome machine registration writes", () => {
     await expect(readFile(registrationPath)).rejects.toThrow();
   });
 
+  test("rejects a requested directory named casegraph/root.yaml without publishing", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = path.join(directory, "example", "casegraph", "root.yaml");
+    await mkdir(rootPath, { recursive: true });
+    const canonicalRootPath = await realpath(rootPath);
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+
+    await expect(
+      new CaseHomeRegistrationStore().register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath: canonicalRootPath,
+      }),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: requested root target ${canonicalRootPath} is a directory, not a regular file`,
+    );
+    await expect(lstat(registrationPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  test("rejects a requested FIFO named casegraph/root.yaml without publishing", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = path.join(directory, "example", "casegraph", "root.yaml");
+    await mkdir(path.dirname(rootPath), { recursive: true });
+    await execFileAsync("mkfifo", [rootPath]);
+    const canonicalRootPath = await realpath(rootPath);
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+
+    await expect(
+      new CaseHomeRegistrationStore().register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath: canonicalRootPath,
+      }),
+    ).rejects.toThrow(
+      `Invalid CaseHome registration at ${registrationPath}: requested root target ${canonicalRootPath} is a FIFO, not a regular file`,
+    );
+    await expect(lstat(registrationPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   test("preserves and reports the sibling temporary file when publication fails", async () => {
     const directory = await temporaryDirectory("casegraph-cases-");
     const configHome = await temporaryDirectory("casegraph-config-");
@@ -455,9 +689,12 @@ describe("CaseHome machine registration writes", () => {
   });
 
   test("creates the sibling temporary file exclusively before publication", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
     const configHome = await temporaryDirectory("casegraph-config-");
+    const existingRoot = await createCaseHomeRoot(directory, "existing");
+    const requestedRoot = await createCaseHomeRoot(directory, "requested");
     const originalBytes = Buffer.from(
-      "PoliceConductUS/existing: /unchanged/casegraph/root.yaml\n",
+      `PoliceConductUS/existing: ${existingRoot}\n`,
     );
     const registrationPath = await writeRegistration(
       configHome,
@@ -469,17 +706,352 @@ describe("CaseHome machine registration writes", () => {
     );
     const occupiedBytes = Buffer.from("do not overwrite this sibling\n");
     await writeFile(occupiedTemporaryPath, occupiedBytes);
+    const store = new CaseHomeRegistrationStore({
+      temporaryId: () => "occupied",
+    });
 
     await expect(
-      publishRegistrationAtomically({
-        content: "complete replacement\n",
-        destinationPath: registrationPath,
-        temporaryPath: occupiedTemporaryPath,
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/requested",
+        rootPath: requestedRoot,
       }),
-    ).rejects.toMatchObject({ code: "EEXIST" });
+    ).rejects.toThrow(occupiedTemporaryPath);
     await expect(readFile(registrationPath)).resolves.toEqual(originalBytes);
     await expect(readFile(occupiedTemporaryPath)).resolves.toEqual(
       occupiedBytes,
     );
+  });
+});
+
+describe("serialized CaseHome machine registration", () => {
+  test("fails one independent contender while a writer holds the guard, then preserves the holder's latest snapshot", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const holderRoot = await createCaseHomeRoot(directory, "holder");
+    const laterRoot = await createCaseHomeRoot(directory, "later");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    const malformedBytes = Buffer.from("PoliceConductUS/holder: [\n");
+    await writeFile(registrationPath, malformedBytes, { mode: 0o600 });
+    let signalGuardAcquired!: () => void;
+    let allowSnapshotRead!: () => void;
+    const guardAcquired = new Promise<void>((resolve) => {
+      signalGuardAcquired = resolve;
+    });
+    const snapshotReadAllowed = new Promise<void>((resolve) => {
+      allowSnapshotRead = resolve;
+    });
+    const holderStore = new CaseHomeRegistrationStore({
+      acquireGuard: async (candidateGuardPath) => {
+        const holderGuard = await open(candidateGuardPath, "wx", 0o600);
+        signalGuardAcquired();
+        await snapshotReadAllowed;
+        await writeFile(
+          registrationPath,
+          `PoliceConductUS/holder: ${holderRoot}\n`,
+          { mode: 0o600 },
+        );
+        return {
+          release: async () => {
+            await holderGuard.close();
+            await unlink(candidateGuardPath);
+          },
+        };
+      },
+    });
+    const holderRegistration = holderStore.register({
+      configHome,
+      caseId: "PoliceConductUS/holder",
+      rootPath: holderRoot,
+    });
+    await guardAcquired;
+
+    const contender = await runRegistrationSubprocess({
+      configHome,
+      caseId: "PoliceConductUS/holder",
+      rootPath: holderRoot,
+    });
+
+    await expect(readFile(registrationPath)).resolves.toEqual(malformedBytes);
+    allowSnapshotRead();
+    await expect(holderRegistration).resolves.toBe("unchanged");
+    expect(contender.code).toBe(17);
+    expect(contender.stdout).toBe("");
+    expect(contender.stderr).toContain(guardPath);
+    expect(contender.stderr).toContain("contention");
+    await expect(lstat(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(configHome)).toEqual(["casehomes.yaml"]);
+
+    await expect(
+      new CaseHomeRegistrationStore().register({
+        configHome,
+        caseId: "PoliceConductUS/later",
+        rootPath: laterRoot,
+      }),
+    ).resolves.toBe("created");
+    await expect(readFile(registrationPath, "utf8")).resolves.toBe(
+      `PoliceConductUS/holder: ${holderRoot}\nPoliceConductUS/later: ${laterRoot}\n`,
+    );
+  });
+
+  test("attempts guard acquisition once and never invokes a fallback publisher on contention", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const guardPath = path.join(configHome, "casehomes.yaml.lock");
+    let acquisitionCount = 0;
+    let publicationCount = 0;
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: () => {
+        acquisitionCount += 1;
+        return Promise.reject(
+          Object.assign(new Error("guard already exists"), { code: "EEXIST" }),
+        );
+      },
+      publish: () => {
+        publicationCount += 1;
+        return Promise.resolve();
+      },
+    });
+
+    await expect(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    ).rejects.toThrow(`CaseHome registration contention at ${guardPath}`);
+    expect(acquisitionCount).toBe(1);
+    expect(publicationCount).toBe(0);
+  });
+
+  test("reads the latest registry snapshot only after acquiring its guard", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const firstRoot = await createCaseHomeRoot(directory, "first");
+    const secondRoot = await createCaseHomeRoot(directory, "second");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const observed = createObservedGuard();
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: async (guardPath: string) => {
+        const guard = await observed.acquireGuard(guardPath);
+        await writeFile(
+          registrationPath,
+          `PoliceConductUS/first: ${firstRoot}\n`,
+          { mode: 0o600 },
+        );
+        return guard;
+      },
+    });
+
+    await expect(
+      store.register({
+        configHome,
+        caseId: "PoliceConductUS/second",
+        rootPath: secondRoot,
+      }),
+    ).resolves.toBe("created");
+    expect(observed.state).toEqual({ acquired: 1, released: 1 });
+    await expect(readFile(registrationPath, "utf8")).resolves.toBe(
+      `PoliceConductUS/first: ${firstRoot}\nPoliceConductUS/second: ${secondRoot}\n`,
+    );
+  });
+
+  test("removes its guard after created and unchanged completion", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const firstRoot = await createCaseHomeRoot(directory, "first");
+    const createdGuard = createObservedGuard();
+    const createdStore = new CaseHomeRegistrationStore({
+      acquireGuard: createdGuard.acquireGuard,
+    });
+
+    await expect(
+      createdStore.register({
+        configHome,
+        caseId: "PoliceConductUS/first",
+        rootPath: firstRoot,
+      }),
+    ).resolves.toBe("created");
+    expect(createdGuard.state).toEqual({ acquired: 1, released: 1 });
+    const unchangedGuard = createObservedGuard();
+    const unchangedStore = new CaseHomeRegistrationStore({
+      acquireGuard: unchangedGuard.acquireGuard,
+      publish: () => Promise.reject(new Error("must not publish unchanged")),
+    });
+
+    await expect(
+      unchangedStore.register({
+        configHome,
+        caseId: "PoliceConductUS/first",
+        rootPath: firstRoot,
+      }),
+    ).resolves.toBe("unchanged");
+    expect(unchangedGuard.state).toEqual({ acquired: 1, released: 1 });
+    await expect(
+      lstat(path.join(configHome, "casehomes.yaml.lock")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("removes its guard after validation and publication failures", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const invalidConfigHome = await temporaryDirectory("casegraph-config-");
+    const publishConfigHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const invalidRegistrationPath = await writeRegistration(
+      invalidConfigHome,
+      "PoliceConductUS/example: [\n",
+    );
+    const validationGuard = createObservedGuard();
+    const validationStore = new CaseHomeRegistrationStore({
+      acquireGuard: validationGuard.acquireGuard,
+    });
+
+    await expect(
+      validationStore.register({
+        configHome: invalidConfigHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    ).rejects.toThrow(invalidRegistrationPath);
+    expect(validationGuard.state).toEqual({ acquired: 1, released: 1 });
+    const publicationGuard = createObservedGuard();
+    const publicationStore = new CaseHomeRegistrationStore({
+      acquireGuard: publicationGuard.acquireGuard,
+      publish: () => Promise.reject(new Error("injected publication failure")),
+    });
+
+    await expect(
+      publicationStore.register({
+        configHome: publishConfigHome,
+        caseId: "PoliceConductUS/example",
+        rootPath,
+      }),
+    ).rejects.toThrow("injected publication failure");
+    expect(publicationGuard.state).toEqual({ acquired: 1, released: 1 });
+    await expect(
+      lstat(path.join(invalidConfigHome, "casehomes.yaml.lock")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      lstat(path.join(publishConfigHome, "casehomes.yaml.lock")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("retains and reports the guard when cleanup fails before publication", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = await writeRegistration(
+      configHome,
+      `PoliceConductUS/example: ${rootPath}\n`,
+    );
+    const guardPath = `${registrationPath}.lock`;
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: retainGuardOnCleanup("injected cleanup failure"),
+    });
+
+    const registration = store.register({
+      configHome,
+      caseId: "PoliceConductUS/example",
+      rootPath,
+    });
+
+    await expect(registration).rejects.toThrow("injected cleanup failure");
+    await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("registry published: false");
+    expect((await lstat(guardPath)).isFile()).toBe(true);
+  });
+
+  test("retains and reports the guard and published registry when cleanup fails after publication", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: retainGuardOnCleanup("injected cleanup failure"),
+    });
+
+    const registration = store.register({
+      configHome,
+      caseId: "PoliceConductUS/example",
+      rootPath,
+    });
+
+    await expect(registration).rejects.toThrow("injected cleanup failure");
+    await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("registry published: true");
+    await expect(readFile(registrationPath, "utf8")).resolves.toBe(
+      `PoliceConductUS/example: ${rootPath}\n`,
+    );
+    expect((await lstat(guardPath)).isFile()).toBe(true);
+  });
+
+  test("reports validation and cleanup failures together without masking publication state", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = await writeRegistration(
+      configHome,
+      "PoliceConductUS/example: [\n",
+    );
+    const guardPath = `${registrationPath}.lock`;
+    const originalBytes = await readFile(registrationPath);
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: retainGuardOnCleanup("cleanup after validation failed"),
+    });
+
+    const registration = store.register({
+      configHome,
+      caseId: "PoliceConductUS/example",
+      rootPath,
+    });
+
+    await expect(registration).rejects.toThrow(
+      "Flow sequence in block collection",
+    );
+    await expect(registration).rejects.toThrow(
+      "cleanup after validation failed",
+    );
+    await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("registry published: false");
+    await expect(readFile(registrationPath)).resolves.toEqual(originalBytes);
+    expect((await lstat(guardPath)).isFile()).toBe(true);
+  });
+
+  test("reports publication and cleanup failures together without masking publication state", async () => {
+    const directory = await temporaryDirectory("casegraph-cases-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const rootPath = await createCaseHomeRoot(directory, "example");
+    const registrationPath = path.join(configHome, "casehomes.yaml");
+    const guardPath = `${registrationPath}.lock`;
+    let temporaryPath: string | undefined;
+    const store = new CaseHomeRegistrationStore({
+      acquireGuard: retainGuardOnCleanup("cleanup after publication failed"),
+      publish: async ({ content, temporaryPath: candidatePath }) => {
+        temporaryPath = candidatePath;
+        await writeFile(candidatePath, content, { flag: "wx", mode: 0o600 });
+        throw new Error("primary publication failure");
+      },
+    });
+
+    const registration = store.register({
+      configHome,
+      caseId: "PoliceConductUS/example",
+      rootPath,
+    });
+
+    await expect(registration).rejects.toThrow("primary publication failure");
+    await expect(registration).rejects.toThrow(
+      "cleanup after publication failed",
+    );
+    await expect(registration).rejects.toThrow(guardPath);
+    await expect(registration).rejects.toThrow("registry published: false");
+    await expect(lstat(registrationPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect((await lstat(temporaryPath ?? "")).isFile()).toBe(true);
+    expect((await lstat(guardPath)).isFile()).toBe(true);
   });
 });
