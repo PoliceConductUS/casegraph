@@ -44,6 +44,8 @@ async function validateOwnedPath(
   const rawSegments = ownedPath.split(/[\\/]/u);
   if (
     ownedPath.length === 0 ||
+    ownedPath.startsWith("/") ||
+    ownedPath.startsWith("\\") ||
     isAbsolute(ownedPath) ||
     rawSegments.includes("..")
   ) {

@@ -399,6 +399,7 @@ spec:
   test.each([
     ["empty", ""],
     ["absolute", "/files/source.pdf"],
+    ["backslash-rooted", "\\files\\source.pdf"],
     ["leading parent segment", "../outside.pdf"],
     ["nested parent segment", "files/nested/../source.pdf"],
     ["bare files directory", "files"],
