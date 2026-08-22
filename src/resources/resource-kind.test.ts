@@ -108,7 +108,9 @@ describe("strict CaseGraph resource kinds", () => {
         { ...validCase, apiVersion: "casegraph.policeconduct.org/v9" },
         "cases/example/root.yaml",
       ),
-    ).toThrow(/casegraph\.policeconduct\.org\/v9.*cases\/example\/root\.yaml/);
+    ).toThrow(
+      /^Unknown CaseGraph resource API version casegraph\.policeconduct\.org\/v9 at cases\/example\/root\.yaml$/,
+    );
   });
 
   test("identifies an unknown kind and supplied path", () => {
@@ -117,7 +119,9 @@ describe("strict CaseGraph resource kinds", () => {
         { ...validCase, kind: "UnknownResource" },
         "cases/example/root.yaml",
       ),
-    ).toThrow(/UnknownResource.*cases\/example\/root\.yaml/);
+    ).toThrow(
+      /^Unknown CaseGraph resource kind UnknownResource at cases\/example\/root\.yaml$/,
+    );
   });
 
   test("serializes the same Case value to identical bytes", () => {

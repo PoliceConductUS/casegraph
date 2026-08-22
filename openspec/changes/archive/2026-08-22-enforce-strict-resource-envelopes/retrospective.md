@@ -8,6 +8,11 @@
 > 185 tests and 8/8 durable OpenSpec specs, completing the pending archive-state
 > evidence in §0.
 
+> **Update 2026-08-22**: §2 was incomplete. GitHub CodeQL check `97058657026`
+> flagged an unanchored URL-like test regex after the archive commit. The
+> follow-up anchors the exact diagnostics in `src/resources/resource-kind.test.ts`;
+> focused tests and the complete repository gate both passed afterward.
+
 ---
 
 ## 0. Evidence
