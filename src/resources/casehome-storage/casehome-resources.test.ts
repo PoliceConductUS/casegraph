@@ -360,6 +360,24 @@ spec:
     ]);
   });
 
+  test.each([
+    ["forward-slash current-directory segment", "./files/source.pdf"],
+    ["backslash current-directory segment", ".\\files\\source.pdf"],
+  ])("normalizes an owned path with a %s", async (_case, declaredPath) => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const expectedPath = join(caseHomePath, nodeAUid, "files", "source.pdf");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      nodeAUid,
+      testNode(nodeAUid, [], [declaredPath]),
+    );
+
+    const snapshot = await openCaseHomeResources(caseHomePath, registry);
+
+    expect(snapshot.resolve(nodeAUid).ownedPaths).toEqual([expectedPath]);
+  });
+
   test("ignores a physical file that no typed owned-path selector declares", async () => {
     const caseHomePath = await createTemporaryCaseHome();
     const undeclaredPath = join(

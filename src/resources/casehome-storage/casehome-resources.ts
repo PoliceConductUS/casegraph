@@ -37,14 +37,25 @@ function isContainedPath(parentPath: string, childPath: string): boolean {
 async function validateOwnedPath(
   ownedPath: string,
   resourceFolder: string,
+  realResourceFolder: string,
   uid: ResourceUid,
   resourcePath: string,
 ): Promise<string> {
-  const segments = ownedPath.split(/[\\/]/u);
+  const rawSegments = ownedPath.split(/[\\/]/u);
   if (
     ownedPath.length === 0 ||
     isAbsolute(ownedPath) ||
-    segments.includes("..") ||
+    rawSegments.includes("..")
+  ) {
+    throw new Error(
+      `Invalid owned path ${JSON.stringify(ownedPath)} for resource ${uid} at ${resourcePath}`,
+    );
+  }
+
+  const segments = rawSegments.filter(
+    (segment) => segment !== "" && segment !== ".",
+  );
+  if (
     segments.length < 2 ||
     (segments[0] !== "files" && segments[0] !== "audits")
   ) {
@@ -64,7 +75,6 @@ async function validateOwnedPath(
     );
   }
 
-  const realResourceFolder = await realpath(resourceFolder);
   let existingPath = resourceFolder;
   for (const segment of segments) {
     existingPath = join(existingPath, segment);
@@ -102,9 +112,19 @@ async function normalizeOwnedPaths(
   resourcePath: string,
 ): Promise<ResourceInspection> {
   const uid = parseResourceReference(inspection.resource.metadata.uid);
+  const realResourceFolder =
+    inspection.ownedPaths.length === 0
+      ? resourceFolder
+      : await realpath(resourceFolder);
   const ownedPaths = await Promise.all(
     inspection.ownedPaths.map((ownedPath) =>
-      validateOwnedPath(ownedPath, resourceFolder, uid, resourcePath),
+      validateOwnedPath(
+        ownedPath,
+        resourceFolder,
+        realResourceFolder,
+        uid,
+        resourcePath,
+      ),
     ),
   );
 
@@ -137,7 +157,6 @@ export async function openCaseHomeResources(
 
   const duplicateRootPath = join(canonicalCaseHomePath, rootUid, "root.yaml");
   try {
-    await lstat(duplicateRootPath);
     const duplicateRoot = await inspectResourceDocument(
       duplicateRootPath,
       registry,
