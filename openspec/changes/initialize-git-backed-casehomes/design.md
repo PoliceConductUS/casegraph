@@ -53,16 +53,21 @@ CaseHome root:  <case-folder>/casegraph/root.yaml
 
 For existing paths, canonical identity uses `realpath`. The exact `casegraph/`
 child itself may not be a symlink. Git's reported top-level must equal the real
-CaseHome; a repository inherited from the CaseFolder or an ancestor therefore
-fails. A bare repository and a `.git` file or other linked-worktree identity
-cannot be the registered primary checkout. An independently versioned outer
-CaseFolder is otherwise irrelevant and unchanged.
+CaseHome for the child to be primary. A repository inherited from the
+CaseFolder or an ancestor is reported as non-primary, but does not block
+initializing an otherwise missing, empty, or explicitly approved exact child as
+a distinct repository. A bare repository cannot be primary. Any `.git` file is
+also ineligible, whether it identifies a linked worktree, a separate-git-dir
+checkout, or a submodule. An independently versioned outer repository is
+otherwise unchanged.
 
 ### Inspect through strict resources and exact Git commands
 
-For a candidate with a root, inspection calls `openCaseHomeResources` with the
-production Case resource registry. This preserves the Issue #40 envelope reader
-and Issue #41 canonical storage validation; no new YAML shortcut is added.
+For a candidate with a root, the new Issue #42 boundaries call
+`openCaseHomeResources` with the production Case resource registry. This
+preserves the Issue #40 envelope reader and Issue #41 canonical storage
+validation inside the new package; it does not alter the durable legacy command
+requirements before Issue #45 replaces their public entry points.
 
 The Git boundary executes argument arrays without a shell and reports the Git
 top-level, Git directory, common directory, branch or detached state, unborn or
@@ -80,23 +85,33 @@ readiness.
 
 ### Prepare local state without claiming durability
 
-Preparation accepts a caller-validated canonical case ID, strict Case resource,
-selected CaseFolder, configuration home, and an explicit boolean recording
-approval to adopt an existing non-Git CaseHome. Provider authentication, commit
-messages, and remote values are not preparation inputs.
+Preparation accepts a caller-validated canonical case ID, selected CaseFolder,
+configuration home, and one exact mode. Create mode includes a caller-supplied
+strict Case resource whose `spec.resources` must be empty. Adoption mode includes
+explicit approval and preserves an already valid strict non-Git CaseHome with
+its complete rooted graph. Provider authentication, commit messages, and remote
+values are not preparation inputs.
 
-Preparation may create a missing CaseFolder and exact `casegraph/` child, use an
-existing empty child, or adopt an existing non-Git CaseHome only after explicit
-approval. Adoption requires its exact root to pass the strict rooted reader and
-to equal the caller-supplied Case resource. Existing files are preserved and
-listed; the strict writer never overwrites `root.yaml`. A file at `casegraph`, a
-symlinked child, an invalid or different root, an inherited/mismatched Git root,
-a nested conflicting repository, or a linked worktree fails.
+Before creating any path, preparation probes Git availability directly. Create
+mode may create a missing CaseFolder and exact `casegraph/` child or use an
+existing empty child only after rejecting nonempty initial membership. Adoption
+mode accepts an existing non-Git CaseHome only after explicit approval and exact
+strict rooted validation; it does not replace its root with a caller-supplied
+one. Existing files are preserved and listed; the strict writer never
+overwrites `root.yaml`. A file or symlink at `casegraph`, invalid rooted graph,
+existing mismatched repository, bare repository, or any gitfile checkout fails.
+An inherited outer repository is reported but does not block initializing the
+exact eligible child; tests snapshot its files, index, refs, branches, remotes,
+and upstreams before and after.
 
-The Git runner initializes only the CaseHome. Preparation writes a missing root
-through `writeResourceDocument`, reopens it through `openCaseHomeResources`, and
-returns the exact uncommitted state. It creates no commit, remote, registration,
-`config.yaml`, lock, alias, default, or worktree.
+The Git runner initializes only the CaseHome. Create mode writes the missing
+empty-membership root through `writeResourceDocument`; both modes reopen through
+`openCaseHomeResources` and return the exact uncommitted state. Each step is a
+separate failure boundary: Git probe, Git initialization, root write, and strict
+reopen. The result inventories only states that actually exist and never reports
+a later step as successful. Preparation creates no commit, remote, registration,
+portable `config.yaml`, lock, alias, default, or worktree. Existing malformed
+`config.yaml` and any existing lock are ignored and byte-preserved.
 
 ### Finalize by commit, immediate push, revalidation, registration
 
@@ -107,12 +122,13 @@ effective push URL. It stages the CaseHome contents, creates the caller-supplied
 first commit, captures the commit ID, and immediately pushes `HEAD` to the
 selected remote with upstream tracking.
 
-If commit succeeds and push fails, finalization returns an incomplete report
-that identifies the local commit, branch/detached state, remote, push error, and
-safe next steps. It does not register or delete anything. After push succeeds,
-it reopens the strict CaseHome and reinspects Git before writing registration.
-A post-push validation or registration failure similarly preserves the pushed
-commit and returns visible recovery state without a false success result.
+Staging, commit creation, commit-ID capture, push, post-push strict resource
+reopen, post-push Git reinspection, and registration are separate injected test
+boundaries. Every failure returns an incomplete report identifying exactly which
+states exist and never claiming a later boundary succeeded. A commit-ID capture
+failure preserves the actual commit without inventing its identity and prevents
+push. A push or later failure preserves the local or pushed commit as applicable
+and prevents registration. No failure path deletes or compensates.
 
 ### Register existing repositories independently of mutation readiness
 
@@ -135,16 +151,19 @@ new target root is resolved through `realpath` before comparison and storage.
 Registration validates the complete next mapping, writes a sibling temporary
 file with exclusive creation, and atomically renames it over the destination.
 An identical ID/path pair performs no write. A different path for the same ID
-fails before any write. No alias or default is inferred.
+fails before any write. The inverse is also unique: a root already mapped from
+one canonical ID cannot be mapped from a second canonical ID. No alias or
+default is inferred.
 
 ### Keep the legacy transition explicit and temporary
 
-The new package imports only `src/resources/**` and its own modules. It never
-calls `src/cases/workspaces/**`, `CaseHome`, or `CaseLocator`. This branch does
-not remove the legacy public implementation because lower stacked layers still
-compile against it. Issue #45 owns replacing the public bootstrap path and
-removing or isolating that legacy surface. This is delivery sequencing, not
-backward compatibility.
+The new Issue #42 package imports only `src/resources/**`, the existing generic
+Git execution boundary, and its own modules. It never calls
+`src/cases/workspaces/**`, `CaseHome`, or `CaseLocator`. This branch does not
+change legacy durable behavior or remove the legacy public implementation
+because lower stacked layers still compile against it. Issue #45 owns replacing
+the public bootstrap path and removing or isolating that legacy surface. This is
+delivery sequencing, not backward compatibility.
 
 ## Risks / Trade-offs
 

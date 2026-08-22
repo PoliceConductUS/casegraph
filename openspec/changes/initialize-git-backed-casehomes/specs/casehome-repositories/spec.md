@@ -19,8 +19,11 @@ surrounding CaseFolder outside that repository.
 
 - **WHEN** the CaseFolder is inside an independently versioned Git repository
 - **AND** its exact `casegraph/` child is available
+- **THEN** inspection reports the inherited repository root as non-primary
 - **THEN** preparation initializes the exact child as a distinct repository
-- **THEN** inspection reports the child as the CaseHome Git root
+- **THEN** the outer repository's files, index, refs, branches, remotes, and
+  upstreams remain unchanged
+- **THEN** post-preparation inspection reports the child as the CaseHome Git root
 
 #### Scenario: Symlinked CaseHome child is rejected
 
@@ -31,7 +34,7 @@ surrounding CaseFolder outside that repository.
 #### Scenario: Conflicting CaseHome child is rejected
 
 - **WHEN** `<case-folder>/casegraph` is a non-directory file, invalid CaseHome,
-  nested repository with a different top-level, or linked worktree
+  or existing repository with a different top-level
 - **THEN** inspection identifies the conflict
 - **THEN** preparation fails without changing the child or registration
 
@@ -62,19 +65,25 @@ push readiness, mutation readiness, and safe recovery.
 - **THEN** every CaseHome file byte, index entry, ref, remote, upstream, and
   registration byte remains unchanged
 
-#### Scenario: Inherited or mismatched repository root is rejected
+#### Scenario: Inherited repository root is non-primary
 
 - **WHEN** Git invoked from the CaseHome resolves a top-level other than the real
   CaseHome path
-- **THEN** inspection fails with both expected and actual repository roots
+- **AND** the exact child has no repository metadata of its own
+- **THEN** inspection reports both expected and inherited repository roots
+- **THEN** inspection classifies the child as available or adoptable rather than
+  as a primary CaseHome
 - **THEN** the containing repository remains unchanged
 
-#### Scenario: Linked operation worktree is not a primary CaseHome
+#### Scenario: Gitfile checkout is not a primary CaseHome
 
-- **WHEN** the selected CaseHome is a linked worktree whose Git common directory
-  belongs to another checkout
-- **THEN** inspection reports that relationship
-- **THEN** registration and preparation reject it as the primary CaseHome
+- **WHEN** the selected CaseHome uses a `.git` file rather than its own `.git`
+  directory because it is a linked worktree, separate-git-dir checkout, or
+  submodule
+- **THEN** inspection reports the gitfile, resolved Git directory, and common
+  directory
+- **THEN** inspection, registration, and preparation reject it as the primary
+  CaseHome
 
 #### Scenario: Missing Git fails before mutation
 
@@ -85,9 +94,11 @@ push readiness, mutation readiness, and safe recovery.
 
 ### Requirement: Validate CaseHome Resources Through The Strict Reader
 
-The system MUST load every existing CaseHome root and rooted member through the
-strict Case resource and canonical storage boundaries and MUST NOT call the
-legacy `CaseHome` or `CaseLocator` reader.
+The new Issue #42 repository boundaries MUST load an existing CaseHome's root
+and rooted members through the strict Case resource and canonical storage
+boundaries whenever they inspect it, and they MUST NOT call the legacy
+`CaseHome` or `CaseLocator` reader. This requirement SHALL NOT change the durable
+behavior of legacy commands before Issue #45 replaces their public entry points.
 
 #### Scenario: Valid strict Case root is accepted
 
@@ -109,40 +120,61 @@ legacy `CaseHome` or `CaseLocator` reader.
 - **THEN** it does not create, validate, modify, or require `config.yaml`
 - **THEN** it does not create or modify `casegraph.lock.yaml`
 
+#### Scenario: Existing malformed portable configuration is preserved
+
+- **WHEN** an otherwise eligible CaseHome contains malformed `config.yaml`
+- **THEN** Issue #42 inspection and preparation ignore its contents
+- **THEN** its bytes remain unchanged
+
+#### Scenario: Existing lock is preserved
+
+- **WHEN** an otherwise eligible CaseHome contains `casegraph.lock.yaml`
+- **THEN** Issue #42 inspection and preparation do not read or modify it
+- **THEN** its bytes remain unchanged
+
+#### Scenario: New preparation does not create portable configuration
+
+- **WHEN** preparation creates a new CaseHome
+- **THEN** neither `config.yaml` nor `casegraph.lock.yaml` exists afterward
+
 ### Requirement: Prepare A Local Uncommitted CaseHome
 
-The system SHALL prepare a missing or empty exact CaseHome, or an explicitly
-approved existing non-Git strict CaseHome, using a caller-supplied validated
-Case resource and SHALL return an uncommitted recovery report without creating
-a remote or machine registration.
+The system SHALL prepare a missing or empty exact CaseHome using a
+caller-supplied validated Case resource with empty `spec.resources`, or SHALL
+preserve and adopt an explicitly approved existing non-Git strict CaseHome with
+its complete rooted graph. It SHALL return an uncommitted recovery report
+without creating a remote or machine registration.
 
 #### Scenario: Missing CaseFolder is prepared
 
 - **WHEN** the selected CaseFolder and its `casegraph/` child do not exist
-- **AND** the caller supplies a validated strict Case root
+- **AND** the caller supplies a validated strict Case root whose
+  `spec.resources` is empty
 - **THEN** preparation creates the CaseFolder and exact CaseHome child
 - **THEN** preparation initializes Git only in the CaseHome
 - **THEN** preparation writes `root.yaml` through the strict resource writer
 - **THEN** preparation reopens the root through the strict CaseHome reader
 - **THEN** no commit, remote, push, or registration exists
+- **THEN** neither `config.yaml` nor `casegraph.lock.yaml` is created
 
 #### Scenario: Empty CaseHome child is prepared
 
 - **WHEN** the CaseFolder exists and its `casegraph/` child is empty
-- **AND** the caller supplies a validated strict Case root
+- **AND** the caller supplies a validated strict Case root whose
+  `spec.resources` is empty
 - **THEN** preparation initializes that child and writes the strict root
 - **THEN** other CaseFolder contents remain unchanged
 
 #### Scenario: Approved existing non-Git CaseHome is adopted
 
 - **WHEN** the exact `casegraph/` child is not a Git repository
-- **AND** its existing root passes the strict rooted CaseHome reader
-- **AND** the existing Case resource equals the caller-supplied validated Case
-  resource
+- **AND** its existing root and complete rooted membership pass the strict
+  CaseHome reader
 - **AND** the caller explicitly approves Git initialization
 - **THEN** preparation initializes Git in that exact child without overwriting
-  the root or deleting existing files
-- **THEN** the recovery inventory lists the preserved existing contents
+  any rooted resource or deleting existing files
+- **THEN** the recovery inventory lists the complete preserved rooted graph and
+  other existing contents
 
 #### Scenario: Existing non-Git CaseHome adoption is declined
 
@@ -150,12 +182,34 @@ a remote or machine registration.
 - **AND** the caller does not explicitly approve Git initialization
 - **THEN** preparation fails without changing any file or registration
 
-#### Scenario: Conflicting existing root is not overwritten
+#### Scenario: Nonempty membership for new preparation is rejected
 
-- **WHEN** the exact child contains an invalid root or a valid strict Case root
-  different from the caller-supplied Case resource
+- **WHEN** a missing or empty CaseHome is requested with a caller-supplied Case
+  resource whose `spec.resources` is nonempty
+- **THEN** preparation fails before creating the CaseFolder, CaseHome, Git
+  repository, root, or registration
+
+#### Scenario: Invalid existing root is not adopted
+
+- **WHEN** the exact child contains an invalid root or invalid rooted membership
 - **THEN** preparation fails before Git initialization
-- **THEN** the existing root bytes remain unchanged
+- **THEN** every existing byte remains unchanged
+
+#### Scenario: Git is probed before preparation creates paths
+
+- **WHEN** the Git executable is unavailable
+- **AND** the selected CaseFolder and CaseHome do not exist
+- **THEN** preparation fails before creating either path
+- **THEN** no root, repository, or registration exists
+
+#### Scenario: Preparation mutation failures preserve exact state
+
+- **WHEN** Git initialization, strict root writing, or post-initialization strict
+  reopening fails
+- **THEN** preparation reports the exact failed step and inventories every path,
+  root byte, and Git state that actually exists
+- **THEN** it does not report any later preparation step as successful
+- **THEN** no commit, push, or registration exists
 
 ### Requirement: Require A Configured Push Target Before First Commit
 
@@ -209,14 +263,6 @@ registration last.
 - **THEN** machine registration is absent
 - **THEN** the local commit and CaseHome files remain available for recovery
 - **THEN** the system does not claim deletion, rollback, or durable success
-
-#### Scenario: Post-push validation failure prevents registration
-
-- **WHEN** the first push succeeds but strict CaseHome or Git revalidation fails
-- **THEN** finalization returns failure and identifies the pushed commit and
-  validation diagnostic
-- **THEN** machine registration is absent
-- **THEN** the pushed and local commits remain available for recovery
 
 #### Scenario: Registration failure preserves pushed state
 
@@ -286,11 +332,22 @@ complete changed mapping atomically, and MUST NOT add aliases or defaults.
 - **THEN** registration fails with both existing and requested paths
 - **THEN** the existing `casehomes.yaml` bytes remain unchanged
 
+#### Scenario: Second canonical ID for one root is rejected atomically
+
+- **WHEN** one canonical real CaseHome-root path is already mapped from a
+  canonical case ID
+- **AND** registration requests the same root path for a different canonical
+  case ID
+- **THEN** registration fails with the existing and requested case IDs and root
+  path
+- **THEN** the existing `casehomes.yaml` bytes remain unchanged
+
 #### Scenario: Invalid registration document is rejected
 
 - **WHEN** `casehomes.yaml` is malformed, has a non-mapping root, duplicate
   keys, non-string keys or values, or a stored path that is missing,
-  non-absolute, non-real, or does not end in `/casegraph/root.yaml`
+  non-absolute, non-real, does not end in `/casegraph/root.yaml`, or maps one
+  canonical real root from multiple canonical IDs
 - **THEN** registration and registration inspection fail with the configuration
   path and validation context
 - **THEN** no partial replacement is published
@@ -308,6 +365,25 @@ resource, repository, commit, ref, remote, pushed commit, or registration.
   current Git state
 - **THEN** it identifies the failed step and a safe next action
 
+#### Scenario: Staging failure stops before commit
+
+- **WHEN** finalization fails while staging the CaseHome contents
+- **THEN** the report inventories the actual working tree and index state
+- **THEN** it reports no local commit, push, or registration
+
+#### Scenario: Commit failure stops before commit identity and push
+
+- **WHEN** staging succeeds and commit creation fails
+- **THEN** the report inventories the actual index and `HEAD` state
+- **THEN** it reports no created commit, push, or registration
+
+#### Scenario: Commit identity capture failure preserves the commit
+
+- **WHEN** the first commit succeeds and capturing its commit ID fails
+- **THEN** the report inventories the actual `HEAD` state without inventing a
+  commit ID
+- **THEN** no push or registration occurs
+
 #### Scenario: Finalization failure reports durable boundaries
 
 - **WHEN** finalization fails before push, during push, after push, or during
@@ -316,22 +392,37 @@ resource, repository, commit, ref, remote, pushed commit, or registration.
   registered state
 - **THEN** it does not report a later state as successful
 
+#### Scenario: Post-push resource revalidation failure is exact
+
+- **WHEN** push succeeds and strict resource reopening fails
+- **THEN** the report identifies the pushed state and resource diagnostic
+- **THEN** it does not report Git reinspection or registration as successful
+
+#### Scenario: Post-push Git reinspection failure is exact
+
+- **WHEN** push and strict resource reopening succeed and Git reinspection fails
+- **THEN** the report identifies the pushed state and Git diagnostic
+- **THEN** it does not report registration as successful
+
 ### Requirement: Keep Provider And Workflow Policy Outside The Foundation
 
 The system MUST expose Issue #42 behavior only as importable internal
-boundaries and MUST NOT add provider, public command, worktree, configuration,
-or migration behavior.
+boundaries and MUST NOT add provider, public command, worktree, portable
+configuration, provider/remote configuration, or migration behavior.
 
-#### Scenario: Issue 45 composes the foundation
+#### Scenario: Repository boundaries are importable now
 
-- **WHEN** a later GitHub init or clone command needs repository inspection,
-  preparation, finalization, or registration
-- **THEN** it invokes the Issue #42 boundaries
-- **THEN** Issue #42 does not authenticate providers, create hosted
-  repositories, configure origins, select remotes, or prompt users
+- **WHEN** Issue #42 is implemented
+- **THEN** repository inspection, preparation, finalization, and existing
+  registration are exported for internal TypeScript callers
+- **THEN** the existing CLI command tree and help output remain byte-identical
+- **THEN** the new package imports no provider client and does not create hosted
+  repositories or configure remotes
 
 #### Scenario: No adjacent architecture is added
 
 - **WHEN** Issue #42 is implemented
-- **THEN** it adds no `config.yaml`, aliases, defaults, operation worktrees,
-  hosting, infrastructure, migration, or legacy compatibility path
+- **THEN** it adds no portable `config.yaml`, aliases, defaults, operation
+  worktrees, hosting, infrastructure, migration, or legacy compatibility path
+- **THEN** it may read and atomically write only the machine-local
+  `<config-home>/casehomes.yaml` registration defined by this capability

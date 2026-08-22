@@ -13,7 +13,8 @@ registration rules.
 - Add a read-only exact repository inspection report for the selected
   CaseFolder and its `casegraph/` child.
 - Add preparation for a missing or empty child and explicitly approved adoption
-  of an existing strict non-Git CaseHome.
+  of an existing strict non-Git CaseHome, with empty membership required only
+  for newly written roots.
 - Add first-commit finalization that requires a configured push target, pushes
   immediately, revalidates, and registers last.
 - Add existing-repository registration that permits dirty or remote-less
@@ -26,11 +27,15 @@ registration rules.
   canonical case ID to one canonical real absolute CaseHome-root path.
 - Make identical registration a no-op and reject conflicting paths without
   changing the existing file.
+- Reject the inverse conflict when another canonical ID already owns the same
+  canonical root path.
 
 **Architecture transition**
 
-- New code uses the strict Case resource and rooted storage boundaries from
-  Issues #40 and #41 and does not call legacy `CaseHome` or `CaseLocator` code.
+- The new Issue #42 package uses the strict Case resource and rooted storage
+  boundaries from Issues #40 and #41 and does not call legacy `CaseHome` or
+  `CaseLocator` code; legacy durable command behavior is unchanged in this
+  layer.
 - Legacy public replacement/removal is deferred to Issue #45 as a temporary
   stacked-layer transition, not a compatibility commitment.
 

@@ -14,9 +14,11 @@ identity and state, remote fetch and effective push URLs, structural push-target
 readiness, machine-registration state, mutation readiness, and an explicit
 recovery inventory.
 
-The mutation lifecycle is deliberately ordered. Preparation creates or adopts
-only the `casegraph/` child, initializes Git there, and writes a caller-supplied
-strict Case root when the root does not exist. Finalization refuses to create
+The mutation lifecycle is deliberately ordered. Preparation probes Git before
+creating paths, then creates or adopts only the `casegraph/` child and
+initializes Git there. New roots must have empty membership; approved existing
+strict non-Git CaseHomes preserve their complete rooted graphs. Finalization
+refuses to create
 the first commit until a caller-selected remote has a configured effective push
 URL. It then creates the commit, immediately pushes it, reopens the strict
 CaseHome, and writes machine registration last. Any push or later failure leaves
@@ -26,8 +28,9 @@ deletion or rollback claim.
 Machine registration is one strict YAML mapping at
 `<config-home>/casehomes.yaml`. Each caller-validated canonical case ID maps to
 the canonical real absolute path ending in `/casegraph/root.yaml`. An identical
-registration is a no-op, a different path conflicts, and a changed mapping is
-published atomically only after the complete next document validates.
+registration is a no-op, a different path conflicts, a root already owned by a
+different canonical ID conflicts, and a changed mapping is published atomically
+only after the complete next document validates.
 
 ## Alternatives Considered
 
@@ -75,12 +78,14 @@ workflow.
   `cases new` implementation. Their public replacement/removal is deferred to
   Issue #45 as a temporary stacked-layer transition, not compatibility.
 - The CaseHome is exactly the real `casegraph/` child. A symlinked child,
-  inherited or mismatched Git root, bare repository, or linked worktree cannot
-  be a primary CaseHome.
+  mismatched Git root, bare repository, or any `.git`-file checkout cannot be a
+  primary CaseHome. An inherited outer repository is reported as non-primary
+  but does not block initializing an eligible exact child as a distinct repo.
 - An outer CaseFolder may be missing, nonempty, or itself inside a Git
   repository. Only its exact `casegraph/` child is mutated.
-- Existing non-Git CaseHome adoption requires explicit caller approval and a
-  valid strict Case root equal to the caller-supplied root. No existing root is
+- Missing or empty creation accepts only a strict Case root with empty
+  `spec.resources`. Existing non-Git CaseHome adoption requires explicit caller
+  approval and preserves its complete valid rooted graph. No existing root is
   overwritten.
 - Preparation creates no commit and no registration. Finalization requires one
   selected configured push target before creating the first commit.
@@ -97,6 +102,9 @@ workflow.
 - `config.yaml` remains a reserved portable CaseHome path. Issue #42 neither
   creates nor validates it; Issues #29 and #53 own that envelope and fail-early
   loading behavior.
+- `casehomes.yaml` is the machine registration owned by this change; the
+  no-configuration boundary applies only to portable config, locks, and
+  provider/remote configuration.
 
 ## Open Questions
 

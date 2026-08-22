@@ -22,10 +22,12 @@ YAML, Zod, Vitest, OpenSpec.
 
 ## Global Constraints
 
-- New production code never imports or calls `src/cases/workspaces/**`, legacy
-  `CaseHome`, or `CaseLocator`.
-- Every existing CaseHome loads through `openCaseHomeResources`; every new root
-  writes through `writeResourceDocument`.
+- New Issue #42 production code never imports or calls
+  `src/cases/workspaces/**`, legacy `CaseHome`, or `CaseLocator`; this layer does
+  not change legacy durable command behavior.
+- Every existing CaseHome loaded by the new Issue #42 package uses
+  `openCaseHomeResources`; every new root it creates uses
+  `writeResourceDocument`.
 - The implementation adds no public CLI, provider API, dependency, portable
   `config.yaml`, worktree, alias, default, infrastructure, migration, deletion,
   rollback, retry, or compatibility behavior.
@@ -56,8 +58,9 @@ YAML, Zod, Vitest, OpenSpec.
   Create cases for an absent file yielding an empty immutable mapping and for
   rejection of malformed YAML, a sequence/scalar root, duplicate keys,
   non-string keys or values, missing targets, non-real/symlinked stored paths,
-  and values that are not absolute paths ending in `casegraph/root.yaml`. Assert
-  every diagnostic identifies
+  values that are not absolute paths ending in `casegraph/root.yaml`, and an
+  existing mapping that assigns one real root to multiple IDs. Assert every
+  diagnostic identifies
   `<config-home>/casehomes.yaml`.
 
 - [ ] **Step 2: Run registration tests and record RED**
@@ -79,9 +82,11 @@ YAML, Zod, Vitest, OpenSpec.
   Create a real temporary `<case-folder>/casegraph/root.yaml`. Prove the store
   resolves it through `realpath`, stores the absolute root path, creates parent
   configuration directories, preserves sorted deterministic YAML, performs no
-  write for an identical registration, and rejects a conflicting path with the
-  old bytes unchanged. Inject a sibling-file publisher that fails before rename
-  and prove the destination bytes remain unchanged.
+  write for an identical registration, rejects a different path for one ID, and
+  rejects a second ID for one already-mapped root. Assert both conflict
+  diagnostics identify the existing/requested ID and path and leave the old
+  bytes unchanged. Inject a sibling-file publisher that fails before rename and
+  prove the destination bytes remain unchanged.
 
 - [ ] **Step 5: Run the tests and confirm the new registration cases fail**
 
@@ -92,10 +97,12 @@ YAML, Zod, Vitest, OpenSpec.
 
   Accept the already validated `caseId` unchanged, resolve the existing target
   root to its real absolute path, require the final two path segments to be
-  `casegraph/root.yaml`, build and validate the complete next mapping, write a
-  uniquely named sibling with `flag: "wx"`, then rename it over the destination.
-  On failure, report the unpublished temporary path without deleting it. Return
-  `"unchanged"` before creating a temporary file for identical registration.
+  `casegraph/root.yaml`, reject both ID-to-different-root and
+  root-to-different-ID conflicts, build and validate the complete next mapping,
+  write a uniquely named sibling with `flag: "wx"`, then rename it over the
+  destination. On failure, report the unpublished temporary path without
+  deleting it. Return `"unchanged"` before creating a temporary file for an
+  identical registration.
 
 - [ ] **Step 7: Run registration tests and record GREEN**
 
@@ -116,8 +123,11 @@ YAML, Zod, Vitest, OpenSpec.
 **Files:**
 
 - Create: `src/casehomes/git-backed-casehome/git.ts`
+- Create: `src/casehomes/git-backed-casehome/index.ts`
 - Create: `src/casehomes/git-backed-casehome/inspect.ts`
 - Create: `src/casehomes/git-backed-casehome/inspect.test.ts`
+- Verify unchanged: `src/cli.ts`
+- Verify unchanged: `test/cli.test.ts`
 
 **Interfaces:**
 
@@ -144,12 +154,18 @@ YAML, Zod, Vitest, OpenSpec.
   readiness, registration state, and recovery inventory. Prove every snapshot
   from Step 1 is byte-identical after inspection.
 
+  Add a CaseFolder fixture that is itself a committed repository. With no exact
+  child repository, assert inspection reports the inherited root as
+  non-primary rather than primary or conflicting, while its files, index, refs,
+  branches, remotes, and upstreams remain byte-identical.
+
 - [ ] **Step 3: Write failing conflict tests**
 
-  Cover a non-directory child, symlinked `casegraph`, outer/inherited Git root,
-  mismatched nested top-level, bare repository, linked worktree primary, missing
-  Git executable, missing or invalid strict root, and rooted resource-storage
-  failure. Assert expected and actual paths appear where applicable.
+  Cover a non-directory child, symlinked `casegraph`, existing mismatched
+  top-level, bare repository, and three separate `.git`-file fixtures: linked
+  worktree, `--separate-git-dir`, and submodule. Cover missing Git executable,
+  missing or invalid strict root, and rooted resource-storage failure. Assert
+  expected Git root/directory/common-directory paths appear where applicable.
 
 - [ ] **Step 4: Run inspection tests and record RED**
 
@@ -163,21 +179,39 @@ YAML, Zod, Vitest, OpenSpec.
 
   Use `execFileResult("git", args, { cwd })`; never use a shell command. Derive
   the exact child without recursively scanning, reject symlink identity before
-  following it, compare real paths to Git's `--show-toplevel`, distinguish a
-  normal `.git` directory from a linked-worktree `.git` file/common directory,
-  and read Git/remotes through explicit non-mutating commands. Load resources
-  only through `openCaseHomeResources` and registration only through Task 1.
-  Freeze copied arrays and nested report values.
+  following it, compare real paths to Git's `--show-toplevel`, report an
+  inherited outer root as non-primary, and reject every `.git` file regardless
+  of whether it names a linked worktree, separate Git directory, or submodule.
+  Read Git/remotes through explicit non-mutating commands. Load resources only
+  through `openCaseHomeResources` and registration only through Task 1. Freeze
+  copied arrays and nested report values. Export inspection from the package
+  entry point without changing `src/cli.ts`.
 
-- [ ] **Step 6: Run inspection tests and record GREEN**
+- [ ] **Step 6: Prove current inspection import and CLI boundaries**
+
+  Import `inspectGitBackedCaseHome` from the new package entry point in the
+  focused test. Run:
+
+  ```bash
+  npm test -- test/cli.test.ts
+  git diff --exit-code 294ee71 -- src/cli.ts test/cli.test.ts
+  rg 'github|octokit|gh |remote add|remote set-url' \
+    src/casehomes/git-backed-casehome
+  ```
+
+  Expected: existing CLI tests pass, both CLI files are unchanged from the Issue
+  #41 parent, and no provider or remote-configuration dependency exists.
+
+- [ ] **Step 7: Run inspection tests and record GREEN**
 
   Run the Step 4 command. Expected: all exact-state, conflict, and immutability
   tests pass.
 
-- [ ] **Step 7: Mark tasks 2.1 and 2.2 complete, commit, and push**
+- [ ] **Step 8: Mark tasks 2.1 and 2.2 complete, commit, and push**
 
   ```bash
   git add src/casehomes/git-backed-casehome/git.ts \
+    src/casehomes/git-backed-casehome/index.ts \
     src/casehomes/git-backed-casehome/inspect.ts \
     src/casehomes/git-backed-casehome/inspect.test.ts \
     openspec/changes/initialize-git-backed-casehomes/tasks.md
@@ -191,14 +225,16 @@ YAML, Zod, Vitest, OpenSpec.
 
 - Create: `src/casehomes/git-backed-casehome/prepare.ts`
 - Create: `src/casehomes/git-backed-casehome/prepare.test.ts`
+- Modify: `src/casehomes/git-backed-casehome/index.ts`
 - Modify: `src/casehomes/git-backed-casehome/inspect.ts`
 
 **Interfaces:**
 
 - Consumes: `GitRunner`, `inspectGitBackedCaseHome`, `writeResourceDocument`,
   `openCaseHomeResources`, and `CaseResourceRegistry`.
-- Produces: `prepareGitBackedCaseHome(input, dependencies): Promise<PreparedCaseHomeReport>` accepting `caseFolder`, `configHome`, validated `caseId`, validated
-  strict `Case` resource, and `approveExistingNonGitCaseHome`.
+- Produces: `prepareGitBackedCaseHome(input, dependencies): Promise<PreparedCaseHomeReport>` accepting common `caseFolder`, `configHome`, and validated `caseId`
+  values plus either `{ mode: "create"; initialCase: CaseResource }` or
+  `{ mode: "adopt"; approveExistingNonGitCaseHome: true }`.
 
 - [ ] **Step 1: Write failing missing/empty preparation tests**
 
@@ -206,17 +242,37 @@ YAML, Zod, Vitest, OpenSpec.
   child, initializes Git only in `casegraph/`, writes deterministic `root.yaml`
   through the strict writer, reopens the rooted snapshot, and returns unborn
   uncommitted state with no remote or registration. Place unrelated files in
-  the outer folder and prove bytes/status remain unchanged.
+  an ordinary outer folder and a separately committed outer Git repository;
+  prove outer files, index, refs, branches, remotes, and upstreams remain
+  unchanged while the exact child becomes a distinct repository.
+
+  First write a caller-supplied strict Case with nonempty `spec.resources` and
+  prove create mode rejects it before creating any CaseFolder, child, root, Git
+  metadata, or registration. Then use empty membership for the GREEN fixture.
 
 - [ ] **Step 2: Write failing adoption and conflict tests**
 
-  Cover explicitly approved strict non-Git CaseHome adoption without root
-  overwrite; declined adoption; caller/existing Case mismatch; invalid root;
-  file/symlink child; inherited/mismatched repository; linked worktree; and Git
-  initialization failure. For every failure, assert exact existing files,
+  Cover explicitly approved strict non-Git CaseHome adoption with multiple
+  rooted resources and owned files, proving the complete rooted graph is
+  preserved without a caller replacement root. Cover declined adoption,
+  invalid rooted membership, file/symlink child, existing mismatched repository,
+  and every `.git`-file checkout. For every failure, assert exact existing files,
   repository state, registration bytes, and recovery inventory.
 
-- [ ] **Step 3: Run preparation tests and record RED**
+  Add malformed existing `config.yaml` and arbitrary `casegraph.lock.yaml`
+  fixtures and prove adoption ignores and byte-preserves both. Prove both files
+  remain absent after new create-mode preparation.
+
+- [ ] **Step 3: Write failing ordered-boundary tests**
+
+  Inject the Git availability probe, Git initialization, strict root writer,
+  and post-initialization strict opener separately. Prove missing Git is detected
+  before a missing CaseFolder path is created. For init, write, and reopen
+  failures, assert the report names the exact failed boundary, inventories only
+  actual paths/root bytes/Git state, reports no later step as successful, and
+  leaves registration absent.
+
+- [ ] **Step 4: Run preparation tests and record RED**
 
   ```bash
   npm test -- src/casehomes/git-backed-casehome/prepare.test.ts
@@ -224,24 +280,30 @@ YAML, Zod, Vitest, OpenSpec.
 
   Expected: FAIL because preparation does not exist.
 
-- [ ] **Step 4: Implement revalidated exact-child preparation**
+- [ ] **Step 5: Implement revalidated exact-child preparation**
 
-  Reinspect immediately before mutation. Create only missing path components
-  inside the selected CaseFolder, initialize Git in the exact child, use
-  `writeResourceDocument` only when root is absent, compare a preserved existing
-  strict resource to the supplied value, reopen with `openCaseHomeResources`,
-  and return the current recovery report. Do not stage, commit, configure a
-  remote, or write registration.
+  Probe Git before creating any path, then reinspect immediately before
+  mutation. In create mode, reject nonempty initial membership before creating
+  paths, initialize Git in the exact child, and use `writeResourceDocument` for
+  the new root. In adoption mode, require approval and preserve the complete
+  existing rooted graph without a replacement root. Reopen through
+  `openCaseHomeResources` and return the current recovery report. Report init,
+  write, and reopen failures exactly. Treat an inherited outer repository as
+  non-primary and initialize the eligible exact child without touching outer
+  state. Do not stage, commit, configure a remote, read portable config/lock
+  files, or write registration. Export preparation from the same package entry
+  point.
 
-- [ ] **Step 5: Run preparation tests and record GREEN**
+- [ ] **Step 6: Run preparation tests and record GREEN**
 
-  Run the Step 3 command. Expected: all preparation and preservation tests pass.
+  Run the Step 4 command. Expected: all preparation and preservation tests pass.
 
-- [ ] **Step 6: Mark tasks 3.1 and 3.2 complete, commit, and push**
+- [ ] **Step 7: Mark tasks 3.1 and 3.2 complete, commit, and push**
 
   ```bash
   git add src/casehomes/git-backed-casehome/prepare.ts \
     src/casehomes/git-backed-casehome/prepare.test.ts \
+    src/casehomes/git-backed-casehome/index.ts \
     src/casehomes/git-backed-casehome/inspect.ts \
     openspec/changes/initialize-git-backed-casehomes/tasks.md
   git commit -m "feat(casehomes): prepare uncommitted repositories"
@@ -254,6 +316,7 @@ YAML, Zod, Vitest, OpenSpec.
 
 - Create: `src/casehomes/git-backed-casehome/finalize.ts`
 - Create: `src/casehomes/git-backed-casehome/finalize.test.ts`
+- Modify: `src/casehomes/git-backed-casehome/index.ts`
 - Modify: `src/casehomes/git-backed-casehome/inspect.ts`
 - Modify: `src/casehomes/git-backed-casehome/registration.ts`
 
@@ -281,18 +344,21 @@ YAML, Zod, Vitest, OpenSpec.
 
 - [ ] **Step 3: Write failing incomplete-state tests**
 
-  Use an unreachable local remote to prove push failure leaves the local commit
-  and no registration. Inject post-push resource and registration failures to
-  prove the pushed commit remains, no partial registration is published, and
-  each report distinguishes local-commit, pushed, and registered boundaries.
-  Assert no recovery path deletes files, Git metadata, refs, remotes, or commits.
+  Inject each boundary independently: staging, commit creation, commit-ID
+  capture, push, post-push strict resource reopen, post-push Git reinspection,
+  and registration. Use an unreachable local remote for the real push failure.
+  For each failure, assert the report names that exact boundary, inventories
+  files/index/HEAD/commit/remote/upstream/registration as they actually exist,
+  never claims a later boundary succeeded, and preserves all files, Git
+  metadata, refs, remotes, local commits, and pushed commits. A commit-ID capture
+  failure must preserve the actual commit, omit an invented ID, and skip push.
 
 - [ ] **Step 4: Write failing existing-registration tests**
 
   Prove a committed tracked-root primary repository may register while dirty and
   remote-less, with registration eligibility true and mutation readiness false.
-  Prove unborn, root-untracked-in-HEAD, root-only-staged, linked-worktree, bare,
-  mismatched-root, and strict resource failures never register.
+  Prove unborn, root-untracked-in-HEAD, root-only-staged, every `.git`-file
+  checkout, bare, mismatched-root, and strict resource failures never register.
 
 - [ ] **Step 5: Run finalization tests and record RED**
 
@@ -306,18 +372,21 @@ YAML, Zod, Vitest, OpenSpec.
 
   Reinspect every precondition, resolve the selected remote's effective push URL
   before `git add`, stage CaseHome contents, commit with the supplied message,
-  capture the commit ID, and immediately run `git push --set-upstream <remote>
-HEAD`. After successful push, reopen strict resources and reinspect Git, then
-  call atomic registration last. Convert each failure boundary into a structured
-  incomplete result with exact diagnostics and recovery inventory; never delete
-  or compensate.
+  capture the commit ID, and immediately run
+  `git push --set-upstream <remote> HEAD`. After successful push, reopen strict
+  resources and reinspect Git, then
+  call atomic registration last. Keep each boundary separately injectable and
+  convert each failure into a structured incomplete result with exact
+  diagnostics and recovery inventory; never delete or compensate. Export
+  finalization from the package entry point.
 
 - [ ] **Step 7: Implement committed existing registration**
 
   Reuse exact inspection. Require a normal primary repository, `HEAD`, strict
   rooted CaseHome, and `git ls-tree` evidence that `root.yaml` is tracked in
   `HEAD`. Permit dirty and remote-less state, register atomically, then reinspect
-  and report mutation readiness separately.
+  and report mutation readiness separately. Export existing registration from
+  the package entry point.
 
 - [ ] **Step 8: Run all focused Issue #42 tests and record GREEN**
 
@@ -332,19 +401,23 @@ HEAD`. After successful push, reopen strict resources and reinspect Git, then
 
 - [ ] **Step 9: Prove the legacy import boundary**
 
+  Import `inspectGitBackedCaseHome`, `prepareGitBackedCaseHome`,
+  `finalizeGitBackedCaseHome`, and `registerExistingGitBackedCaseHome` from
+  `src/casehomes/git-backed-casehome/index.ts` in the focused tests. Then run:
+
   ```bash
-  rg 'cases/workspaces|CaseHome|CaseLocator' \
+  rg 'cases/workspaces|case-home-document|case-locator-document|readCaseHome|readCaseLocator|writeCaseHome|writeCaseLocator' \
     src/casehomes/git-backed-casehome
   ```
 
-  Expected: no legacy imports or calls; occurrences in test descriptions or
-  repository-domain type names must not name the legacy envelope types.
+  Expected: no legacy imports or calls from the new Issue #42 package.
 
 - [ ] **Step 10: Mark tasks 4.1 and 4.2 complete, commit, and push**
 
   ```bash
   git add src/casehomes/git-backed-casehome/finalize.ts \
     src/casehomes/git-backed-casehome/finalize.test.ts \
+    src/casehomes/git-backed-casehome/index.ts \
     src/casehomes/git-backed-casehome/inspect.ts \
     src/casehomes/git-backed-casehome/registration.ts \
     openspec/changes/initialize-git-backed-casehomes/tasks.md
