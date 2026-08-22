@@ -4,6 +4,9 @@
 
 Accepted.
 
+ADR 0009 resolves the previously open initial API-version and strict-envelope
+decisions for CaseGraph resources.
+
 ## Context
 
 Case material often arrives as existing folders containing PDFs, Markdown,
@@ -67,9 +70,10 @@ Original source artifacts and derived artifacts have distinct kinds and
 distinct `spec` schemas. CaseGraph uses shared readers and writers that select
 a strict Zod schema by `apiVersion` and `kind`.
 
-The exact initial kind names and API-version string remain implementation-time
-decisions. New kinds should be added only when their specifications genuinely
-differ rather than using one loose artifact schema.
+The exact initial kind names remain implementation-time decisions. ADR 0009
+defines the initial API-version string. New kinds should be added only when
+their specifications genuinely differ rather than using one loose artifact
+schema.
 
 ### Preserve source and derivation provenance
 
@@ -147,7 +151,6 @@ without duplicating its analysis.
 This ADR does not define:
 
 - exact source-artifact or derived-artifact kind names
-- the initial CaseGraph API-version string
 - complete artifact schemas
 - the recursive indexing command name or syntax
 - supported extraction formats and tools

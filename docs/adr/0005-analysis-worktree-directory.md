@@ -4,6 +4,9 @@
 
 Accepted.
 
+The YAML examples predate and are governed by the strict resource-envelope
+decision in ADR 0009. They are historical illustrations, not current schemas.
+
 ## Context
 
 CaseGraph analysis work is moving earlier than originally expected. The first
