@@ -43,7 +43,7 @@ metadata:
   name: "@example-case/federal-docket"
   uid: "tz4a98xxat96iws9zmbrgj3a"
 spec:
-  dependencies: []
+  dependencies: {}
 ```
 
 The identity fields have separate purposes:
@@ -68,7 +68,8 @@ conflict rather than guessing.
 ### Use one shared dependency model
 
 CaseHome and non-CaseHome package configurations use the same dependency
-representation: an ordered, duplicate-free list of scoped package names.
+representation: a mapping from scoped package name to a package selector. The
+only supported selector is the literal string `latest`.
 
 ```yaml
 apiVersion: casegraph.policeconduct.org/v1alpha1
@@ -78,13 +79,17 @@ metadata:
   uid: "n8m2y4v6k9p3q7r5s1t0w2x4"
 spec:
   dependencies:
-    - "@example-case/federal-docket"
-    - "@shared/fifth-circuit-authorities"
+    "@example-case/federal-docket": latest
+    "@shared/fifth-circuit-authorities": latest
 ```
 
 The configuration field is named `dependencies`, not `imports`. A dependency
 makes another package available for resolution. It does not import every
 resource from that package into the case graph.
+
+CaseGraph rejects any selector other than `latest`. It does not silently ignore
+or approximate semantic-version ranges that it cannot enforce. Supporting
+additional selectors requires a later explicit package-release decision.
 
 `PackageConfig` and `CaseHomeConfig` share package identity and dependency
 contracts. `CaseHomeConfig` additionally owns the package path used for
@@ -96,10 +101,10 @@ must be specified in OpenSpec before implementation.
 
 ### Resolve identities independently of physical layout
 
-A resolver accepts a scoped package name and searches only packages made
-available through the selected CaseHome's package path or explicit local
-package registration. It validates each candidate's canonical entry point and
-package-configuration metadata.
+A resolver accepts a scoped package name and selector, rejects selectors other
+than `latest`, and searches only packages made available through the selected
+CaseHome's package path or explicit local package registration. It validates
+each candidate's canonical entry point and package-configuration metadata.
 
 Physical folder names do not have to contain the package name or UID. The same
 package may therefore live at different paths on different machines. The
@@ -142,6 +147,7 @@ CaseGraph records successful dependency resolution in deterministic
 `casegraph.lock.yaml`. Each locked package records:
 
 - scoped package name
+- requested selector, currently always `latest`
 - CUID2 UID
 - deterministic content digest
 - dependency relationships needed to reproduce and diagnose the resolution
@@ -157,12 +163,13 @@ replace a valid lock.
 CaseGraph needs two local installation operations:
 
 ```text
-casegraph install <case-id> <package>
+casegraph install <case-id> <package>@latest
 casegraph install <case-id>
 ```
 
-The first declares one direct scoped-name dependency and resolves the
-dependency closure. The second resolves all dependencies already declared by
+The first declares one direct scoped-name dependency with the `latest` selector
+and resolves the dependency closure. The second resolves all dependencies
+already declared by
 the CaseHome. Both operate only on packages available through the CaseHome
 package path, update configuration and locking atomically as applicable, and do
 not download, copy, move, or modify dependency packages.
@@ -188,9 +195,9 @@ other decisions remain accepted.
 
 CaseHomes can be committed and cloned without embedding package locations from
 the machine where they were created. Package producers may organize folders
-without encoding identity into the directory tree. Dependencies remain a small
-list of scoped names, while the lock preserves exact UID-and-digest
-reproducibility and detects changed content.
+without encoding identity into the directory tree. Dependencies retain a
+package.json-like name-to-selector shape, while the lock preserves exact
+UID-and-digest reproducibility and detects changed content.
 
 The resolver, installer, and doctor require strict package identity and a
 deterministic digest contract. Existing relative-folder references require an
@@ -213,6 +220,11 @@ Rejected because the current local-package workflow needs exact identity and
 content verification, both supplied by the UID and lock digest. A version field
 would add a second freshness signal without a current registry or release
 selection workflow.
+
+### Accept but ignore arbitrary selectors
+
+Rejected because accepting a selector that CaseGraph does not enforce would
+make the configuration claim a constraint that resolution silently violates.
 
 ### Put the UID or digest in every artifact path
 
