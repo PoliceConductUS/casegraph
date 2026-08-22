@@ -70,6 +70,18 @@ const observedResourceRegistry = createResourceRegistry([
   ObservedResourceDefinition,
 ]);
 
+function assertInspectionIsDeeplyReadonly(): void {
+  const inspection = CaseResourceDefinition.inspect(validCase);
+
+  // @ts-expect-error Inspected metadata is deeply readonly.
+  inspection.resource.metadata.uid = firstUid;
+  // @ts-expect-error Inspected spec properties are deeply readonly.
+  inspection.resource.spec.resources = [];
+  // @ts-expect-error Inspected nested arrays are deeply readonly.
+  inspection.resource.spec.resources[0] = inspection.resource.metadata.uid;
+}
+void assertInspectionIsDeeplyReadonly;
+
 describe("strict CaseGraph resource kinds", () => {
   test("rejects duplicate resource registration keys", () => {
     expect(() =>
@@ -92,6 +104,47 @@ describe("strict CaseGraph resource kinds", () => {
       resourceReferences: [secondUid, thirdUid],
       ownedPaths: [],
     });
+  });
+
+  test("returns a deeply frozen inspection without reference-selector aliases", () => {
+    const inspection = CaseResourceDefinition.inspect(validCase);
+    const nodeInspection = FixtureNodeDefinition.inspect({
+      apiVersion: validCase.apiVersion,
+      kind: "FixtureNode",
+      metadata: { uid: secondUid },
+      spec: {
+        relatedUid: thirdUid,
+        sourcePath: "files/source.pdf",
+        ignoredPath: "audits/not-selected.yaml",
+      },
+    });
+
+    expect(Object.isFrozen(inspection)).toBe(true);
+    expect(Object.isFrozen(inspection.resource)).toBe(true);
+    expect(Object.isFrozen(inspection.resource.metadata)).toBe(true);
+    expect(Object.isFrozen(inspection.resource.spec)).toBe(true);
+    expect(Object.isFrozen(inspection.resource.spec.resources)).toBe(true);
+    expect(Object.isFrozen(inspection.resourceReferences)).toBe(true);
+    expect(Object.isFrozen(nodeInspection.ownedPaths)).toBe(true);
+    expect(inspection.resourceReferences).not.toBe(
+      inspection.resource.spec.resources,
+    );
+
+    expect(() =>
+      Object.assign(inspection.resource.metadata, { uid: thirdUid }),
+    ).toThrow(TypeError);
+    expect(() =>
+      Object.assign(inspection.resource.spec.resources, { 0: thirdUid }),
+    ).toThrow(TypeError);
+    expect(() =>
+      Object.assign(inspection.resourceReferences, { 0: thirdUid }),
+    ).toThrow(TypeError);
+    expect(() =>
+      Object.assign(nodeInspection.ownedPaths, { 0: "audits/review.yaml" }),
+    ).toThrow(TypeError);
+    expect(() =>
+      Object.assign(inspection, { category: "legal-effect-edge" }),
+    ).toThrow(TypeError);
   });
 
   test.each([

@@ -15,10 +15,16 @@ export interface CaseGraphResource {
 
 export type ResourceCategory = "node" | "legal-effect-edge";
 
+export type DeepReadonly<Value> = Value extends readonly (infer Item)[]
+  ? readonly DeepReadonly<Item>[]
+  : Value extends object
+    ? { readonly [Key in keyof Value]: DeepReadonly<Value[Key]> }
+    : Value;
+
 export interface ResourceInspection<
   Resource extends CaseGraphResource = CaseGraphResource,
 > {
-  readonly resource: Resource;
+  readonly resource: DeepReadonly<Resource>;
   readonly category: ResourceCategory;
   readonly resourceReferences: readonly ResourceUid[];
   readonly ownedPaths: readonly string[];
@@ -98,6 +104,18 @@ export function defineResourceKind<
     >;
   }
 
+  function freezeRecursively<Value>(value: Value): DeepReadonly<Value> {
+    if (typeof value !== "object" || value === null) {
+      return value as DeepReadonly<Value>;
+    }
+
+    for (const nestedValue of Object.values(value)) {
+      freezeRecursively(nestedValue);
+    }
+
+    return Object.freeze(value) as DeepReadonly<Value>;
+  }
+
   return {
     apiVersion: CASEGRAPH_RESOURCE_API_VERSION,
     kind: options.kind,
@@ -105,12 +123,19 @@ export function defineResourceKind<
     read,
     inspect(value: unknown) {
       const resource = read(value);
-      return {
-        resource,
+      const resourceReferences = Object.freeze([
+        ...(options.resourceReferences?.(resource) ?? []),
+      ]);
+      const ownedPaths = Object.freeze([
+        ...(options.ownedPaths?.(resource) ?? []),
+      ]);
+
+      return Object.freeze({
+        resource: freezeRecursively(resource),
         category: options.category,
-        resourceReferences: options.resourceReferences?.(resource) ?? [],
-        ownedPaths: options.ownedPaths?.(resource) ?? [],
-      };
+        resourceReferences,
+        ownedPaths,
+      });
     },
     serialize(value: unknown): string {
       return stringify(read(value));
