@@ -1068,21 +1068,29 @@ describe("required Git result classification", () => {
   const success = (stdout = "") => ({ exitCode: 0, stderr: "", stdout });
 
   test.each([
-    ["absolute git directory", "rev-parse --absolute-git-dir"],
-    ["common directory", "rev-parse --path-format=absolute --git-common-dir"],
-    ["bare state", "rev-parse --is-bare-repository"],
-    ["top level", "rev-parse --show-toplevel"],
-    ["HEAD", "rev-parse --verify --quiet HEAD"],
-    ["branch", "branch --show-current"],
-    ["status", "status --porcelain=v1"],
-    ["tracked root", "ls-tree --name-only HEAD -- root.yaml"],
-    ["upstream", "for-each-ref --format=%(upstream:short) refs/heads/main"],
-    ["remote names", "remote"],
-    ["fetch URL", "remote get-url --all origin"],
-    ["push URL", "remote get-url --push --all origin"],
+    ["absolute git directory", "rev-parse --absolute-git-dir", false],
+    [
+      "common directory",
+      "rev-parse --path-format=absolute --git-common-dir",
+      false,
+    ],
+    ["bare state", "rev-parse --is-bare-repository", false],
+    ["top level", "rev-parse --show-toplevel", true],
+    ["HEAD", "rev-parse --verify --quiet HEAD", false],
+    ["branch", "branch --show-current", true],
+    ["status", "status --porcelain=v1", true],
+    ["tracked root", "ls-tree --name-only HEAD -- root.yaml", true],
+    [
+      "upstream",
+      "for-each-ref --format=%(upstream:short) refs/heads/main",
+      true,
+    ],
+    ["remote names", "remote", true],
+    ["fetch URL", "remote get-url --all origin", true],
+    ["push URL", "remote get-url --push --all origin", true],
   ] as const)(
     "makes a failed %s command unavailable",
-    async (_name, failed) => {
+    async (_name, failed, preservesCommit) => {
       const fixture = await createCaseHome({ root: strictCaseRoot() });
       await mkdir(path.join(fixture.caseHome, ".git"));
       const canonicalHome = await realpath(fixture.caseHome);
@@ -1147,6 +1155,8 @@ describe("required Git result classification", () => {
       expect(report.recovery).toMatchObject({
         repositoryDiagnostic: report.repository.diagnostic,
       });
+      if (preservesCommit) expect(report.recovery.commit).toBe("a".repeat(40));
+      else expect(report.recovery).not.toHaveProperty("commit");
       expect(report.registrationEligibility.reasons).toContain(
         report.repository.diagnostic,
       );
@@ -1158,6 +1168,7 @@ describe("required Git result classification", () => {
   );
 
   test.each([
+    [128, "", ""],
     [127, "", "fatal: not a git repository\n"],
     [128, "unexpected", "fatal: not a git repository\n"],
     [128, "", "permission denied\n"],
@@ -1350,13 +1361,27 @@ describe("bare repository report", () => {
         unborn: !committed,
         branch: "main",
         detached: false,
-        upstream: undefined,
         remotes: [
           { name: "origin", fetchUrls: [remoteUrl], pushUrls: [remoteUrl] },
         ],
       });
       if (committed) expect(report.repository).toHaveProperty("commit");
       else expect(report.repository).not.toHaveProperty("commit");
+      expect(report.repository).not.toHaveProperty("upstream");
+      expect(Object.keys(report.repository).sort()).toEqual(
+        [
+          "bare",
+          "branch",
+          "commonDirectory",
+          ...(committed ? ["commit"] : []),
+          "detached",
+          "gitDirectory",
+          "reason",
+          "remotes",
+          "state",
+          "unborn",
+        ].sort(),
+      );
       for (const property of [
         "topLevel",
         "dirty",
@@ -1390,8 +1415,67 @@ describe("bare repository report", () => {
       if (committed) expect(report.recovery).toHaveProperty("commit");
       else expect(report.recovery).not.toHaveProperty("commit");
       expect(report.recovery).not.toHaveProperty("repositoryDiagnostic");
+      const bareReason = `Exact CaseHome repository at ${await realpath(caseHome)} is bare`;
+      expect(report.registrationEligibility).toEqual({
+        eligible: false,
+        reasons: [bareReason],
+      });
+      expect(report.mutationReadiness).toEqual({
+        ready: false,
+        reasons: [bareReason],
+      });
     },
   );
+
+  test("omits absent branch and upstream keys for a detached bare repository", async () => {
+    const caseFolder = await temporaryDirectory("casegraph-bare-detached-");
+    const configHome = await temporaryDirectory("casegraph-config-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    await git(caseFolder, [
+      "init",
+      "--bare",
+      "--initial-branch=main",
+      caseHome,
+    ]);
+    const source = await createCaseHome({ commit: true });
+    await git(source.caseHome, ["remote", "add", "bare-target", caseHome]);
+    await git(source.caseHome, ["push", "bare-target", "main:main"]);
+    const commit = await git(caseHome, ["rev-parse", "HEAD"]);
+    await git(caseHome, ["update-ref", "--no-deref", "HEAD", commit]);
+
+    const report = await inspectGitBackedCaseHome({
+      caseFolder,
+      caseId: "PoliceConductUS/bare-detached",
+      configHome,
+    });
+
+    expect(report.repository).toMatchObject({
+      state: "ineligible",
+      reason: "bare",
+      bare: true,
+      commit,
+      unborn: false,
+      detached: true,
+    });
+    expect(report.repository).not.toHaveProperty("branch");
+    expect(report.repository).not.toHaveProperty("upstream");
+    expect(Object.keys(report.repository).sort()).toEqual(
+      [
+        "bare",
+        "commit",
+        "commonDirectory",
+        "detached",
+        "gitDirectory",
+        "reason",
+        "remotes",
+        "state",
+        "unborn",
+      ].sort(),
+    );
+    const bareReason = `Exact CaseHome repository at ${await realpath(caseHome)} is bare`;
+    expect(report.registrationEligibility.reasons).toEqual([bareReason]);
+    expect(report.mutationReadiness.reasons).toEqual([bareReason]);
+  });
 
   test.each([
     "remote",

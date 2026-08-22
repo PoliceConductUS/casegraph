@@ -234,8 +234,25 @@ async function inspectRemotes(
   return { state: "success", remotes };
 }
 
-function unavailable(diagnostic: string): RepositoryReport {
-  return { state: "unavailable", diagnostic };
+interface RepositoryInspection {
+  readonly repository: RepositoryReport;
+  readonly recoveryCommit?: string;
+}
+
+function inspected(
+  repository: RepositoryReport,
+  recoveryCommit?: string,
+): RepositoryInspection {
+  return recoveryCommit === undefined
+    ? { repository }
+    : { repository, recoveryCommit };
+}
+
+function unavailable(
+  diagnostic: string,
+  recoveryCommit?: string,
+): RepositoryInspection {
+  return inspected({ state: "unavailable", diagnostic }, recoveryCommit);
 }
 
 async function inspectRepository(
@@ -245,7 +262,7 @@ async function inspectRepository(
   gitEntry:
     | { readonly isDirectory: boolean; readonly isFile: boolean }
     | undefined,
-): Promise<RepositoryReport> {
+): Promise<RepositoryInspection> {
   const absoluteGitDirectoryArgs = ["rev-parse", "--absolute-git-dir"] as const;
   const gitDirectoryResult = await git(absoluteGitDirectoryArgs, cwd);
   if (gitDirectoryResult.exitCode !== 0) {
@@ -257,7 +274,7 @@ async function inspectRepository(
       stderrLines.length === 1 &&
       stderrLines[0]?.startsWith("fatal: not a git repository")
     ) {
-      return { state: "absent" };
+      return inspected({ state: "absent" });
     }
     return unavailable(
       commandDiagnostic(absoluteGitDirectoryArgs, gitDirectoryResult),
@@ -309,7 +326,7 @@ async function inspectRepository(
     "--show-current",
   ]);
   if (branchResult.state === "failure")
-    return unavailable(branchResult.diagnostic);
+    return unavailable(branchResult.diagnostic, commit);
   const branch = branchResult.value || undefined;
   const upstreamArgs =
     branch === undefined
@@ -321,26 +338,29 @@ async function inspectRepository(
         ] as const);
   const upstreamResult = await requiredGitValue(git, cwd, upstreamArgs);
   if (upstreamResult.state === "failure")
-    return unavailable(upstreamResult.diagnostic);
+    return unavailable(upstreamResult.diagnostic, commit);
   const upstream = upstreamResult.value || undefined;
 
   if (bare) {
     const remoteResult = await inspectRemotes(git, cwd);
     if (remoteResult.state === "failure")
-      return unavailable(remoteResult.diagnostic);
-    return {
-      state: "ineligible",
-      reason: "bare",
-      bare: true,
-      gitDirectory,
-      commonDirectory,
-      ...(commit === undefined ? {} : { commit }),
-      unborn: commit === undefined,
-      branch,
-      detached: branch === undefined && commit !== undefined,
-      upstream,
-      remotes: remoteResult.remotes,
-    };
+      return unavailable(remoteResult.diagnostic, commit);
+    return inspected(
+      {
+        state: "ineligible",
+        reason: "bare",
+        bare: true,
+        gitDirectory,
+        commonDirectory,
+        ...(commit === undefined ? {} : { commit }),
+        unborn: commit === undefined,
+        ...(branch === undefined ? {} : { branch }),
+        detached: branch === undefined && commit !== undefined,
+        ...(upstream === undefined ? {} : { upstream }),
+        remotes: remoteResult.remotes,
+      },
+      commit,
+    );
   }
 
   const topLevelResult = await requiredGitValue(git, cwd, [
@@ -348,10 +368,11 @@ async function inspectRepository(
     "--show-toplevel",
   ]);
   if (topLevelResult.state === "failure")
-    return unavailable(topLevelResult.diagnostic);
+    return unavailable(topLevelResult.diagnostic, commit);
   if (topLevelResult.value.length === 0)
     return unavailable(
       "Git command `git rev-parse --show-toplevel` returned an empty top-level path",
+      commit,
     );
   const topLevel = canonicalGitPath(topLevelResult.value, cwd);
   const statusResult = await requiredGitValue(git, cwd, [
@@ -359,7 +380,7 @@ async function inspectRepository(
     "--porcelain=v1",
   ]);
   if (statusResult.state === "failure")
-    return unavailable(statusResult.diagnostic);
+    return unavailable(statusResult.diagnostic, commit);
   let rootEntry: string | undefined;
   if (commit !== undefined) {
     const rootResult = await requiredGitValue(git, cwd, [
@@ -370,12 +391,12 @@ async function inspectRepository(
       "root.yaml",
     ]);
     if (rootResult.state === "failure")
-      return unavailable(rootResult.diagnostic);
+      return unavailable(rootResult.diagnostic, commit);
     rootEntry = rootResult.value;
   }
   const remoteResult = await inspectRemotes(git, cwd);
   if (remoteResult.state === "failure")
-    return unavailable(remoteResult.diagnostic);
+    return unavailable(remoteResult.diagnostic, commit);
   const details: WorktreeRepositoryDetails = {
     gitDirectory,
     commonDirectory,
@@ -391,42 +412,54 @@ async function inspectRepository(
   };
 
   if (gitEntry?.isFile === true) {
-    return {
-      state: "ineligible",
-      reason: "gitfile",
-      expectedTopLevel,
-      bare: false,
-      gitFile: path.join(cwd, ".git"),
-      ...details,
-    };
+    return inspected(
+      {
+        state: "ineligible",
+        reason: "gitfile",
+        expectedTopLevel,
+        bare: false,
+        gitFile: path.join(cwd, ".git"),
+        ...details,
+      },
+      commit,
+    );
   }
   if (topLevel !== expectedTopLevel) {
     if (gitEntry === undefined) {
-      return {
-        state: "inherited",
-        expectedTopLevel,
-        inheritedTopLevel: topLevel,
-        ...details,
-      };
+      return inspected(
+        {
+          state: "inherited",
+          expectedTopLevel,
+          inheritedTopLevel: topLevel,
+          ...details,
+        },
+        commit,
+      );
     }
-    return {
-      state: "ineligible",
-      reason: "mismatched-top-level",
-      expectedTopLevel,
-      bare: false,
-      ...details,
-    };
+    return inspected(
+      {
+        state: "ineligible",
+        reason: "mismatched-top-level",
+        expectedTopLevel,
+        bare: false,
+        ...details,
+      },
+      commit,
+    );
   }
   if (gitEntry?.isDirectory !== true) {
-    return {
-      state: "ineligible",
-      reason: "mismatched-top-level",
-      expectedTopLevel,
-      bare: false,
-      ...details,
-    };
+    return inspected(
+      {
+        state: "ineligible",
+        reason: "mismatched-top-level",
+        expectedTopLevel,
+        bare: false,
+        ...details,
+      },
+      commit,
+    );
   }
-  return { state: "primary", ...details };
+  return inspected({ state: "primary", ...details }, commit);
 }
 
 async function inspectRegistration(
@@ -587,15 +620,18 @@ export async function inspectGitBackedCaseHome(
   }
 
   if (childEntry === undefined) {
-    const repository =
+    const repositoryInspection: RepositoryInspection =
       gitUnavailableDiagnostic !== undefined
-        ? ({
-            state: "unavailable",
-            diagnostic: gitUnavailableDiagnostic,
-          } as const)
+        ? {
+            repository: {
+              state: "unavailable",
+              diagnostic: gitUnavailableDiagnostic,
+            },
+          }
         : (await exists(caseFolder))
           ? await inspectRepository(git, caseFolder, caseHome, undefined)
-          : ({ state: "absent" } as const);
+          : { repository: { state: "absent" } };
+    const repository = repositoryInspection.repository;
     const inherited = repository.state === "inherited";
     const repositoryUnavailable = repository.state === "unavailable";
     const repositoryReason =
@@ -649,6 +685,9 @@ export async function inspectGitBackedCaseHome(
       ],
       recovery: {
         paths: recoveryPaths,
+        ...(repositoryInspection.recoveryCommit === undefined
+          ? {}
+          : { commit: repositoryInspection.recoveryCommit }),
         ...(repository.state === "unavailable"
           ? { repositoryDiagnostic: repository.diagnostic }
           : {}),
@@ -701,10 +740,16 @@ export async function inspectGitBackedCaseHome(
   const gitEntry = await gitEntryAt(canonicalHome);
   if (gitEntry !== undefined)
     recoveryPaths.push(path.join(canonicalHome, ".git"));
-  const repository: RepositoryReport =
+  const repositoryInspection: RepositoryInspection =
     gitUnavailableDiagnostic === undefined
       ? await inspectRepository(git, canonicalHome, canonicalHome, gitEntry)
-      : { state: "unavailable", diagnostic: gitUnavailableDiagnostic };
+      : {
+          repository: {
+            state: "unavailable",
+            diagnostic: gitUnavailableDiagnostic,
+          },
+        };
+  const repository = repositoryInspection.repository;
   const registration = await inspectRegistration(
     registrationStore,
     input.configHome,
@@ -747,7 +792,11 @@ export async function inspectGitBackedCaseHome(
     if (resource.state !== "valid")
       registrationReasons.push("strict CaseHome resources are invalid");
   } else if (repository.state !== "primary") {
-    registrationReasons.push("repository is not an exact primary checkout");
+    registrationReasons.push(
+      repository.state === "ineligible" && repository.reason === "bare"
+        ? `Exact CaseHome repository at ${canonicalHome} is bare`
+        : "repository is not an exact primary checkout",
+    );
   } else {
     if (resource.state !== "valid")
       registrationReasons.push("strict CaseHome resources are invalid");
@@ -768,7 +817,11 @@ export async function inspectGitBackedCaseHome(
     if (resource.state !== "valid")
       mutationReasons.push("strict CaseHome resources are invalid");
   } else if (repository.state !== "primary") {
-    mutationReasons.push("repository is not an exact primary checkout");
+    mutationReasons.push(
+      repository.state === "ineligible" && repository.reason === "bare"
+        ? `Exact CaseHome repository at ${canonicalHome} is bare`
+        : "repository is not an exact primary checkout",
+    );
   } else {
     if (resource.state !== "valid")
       mutationReasons.push("strict CaseHome resources are invalid");
@@ -827,12 +880,9 @@ export async function inspectGitBackedCaseHome(
     recovery: {
       paths: recoveryPaths,
       resourceCount: resource.state === "valid" ? resource.count : undefined,
-      ...(repository.state !== "absent" &&
-      repository.state !== "not-inspected" &&
-      repository.state !== "unavailable" &&
-      repository.commit !== undefined
-        ? { commit: repository.commit }
-        : {}),
+      ...(repositoryInspection.recoveryCommit === undefined
+        ? {}
+        : { commit: repositoryInspection.recoveryCommit }),
       ...(repository.state === "unavailable"
         ? { repositoryDiagnostic: repository.diagnostic }
         : {}),

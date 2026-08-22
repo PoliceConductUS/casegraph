@@ -13,6 +13,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import { createGitRunner } from "./git.js";
+import { inspectGitBackedCaseHome } from "./inspect.js";
 
 const temporaryDirectories: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -77,25 +78,65 @@ test("sanitizes ambient Git selectors and configuration without losing PATH", as
   expect(child.PATH).toContain(directory);
 });
 
-test("ambient repository selectors cannot make repository B masquerade as A", async () => {
+test("the full inspector reports only repository A under hostile ambient Git state", async () => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "casegraph-git-isolation-"),
   );
   temporaryDirectories.push(directory);
-  const repositoryA = path.join(directory, "a");
-  const repositoryB = path.join(directory, "b");
-  await mkdir(repositoryA);
-  await mkdir(repositoryB);
-  await execFileAsync("git", ["init", "--initial-branch=main"], {
-    cwd: repositoryA,
-  });
-  await execFileAsync("git", ["init", "--initial-branch=other"], {
-    cwd: repositoryB,
-  });
+  const caseFolderA = path.join(directory, "a");
+  const caseFolderB = path.join(directory, "b");
+  const repositoryA = path.join(caseFolderA, "casegraph");
+  const repositoryB = path.join(caseFolderB, "casegraph");
+  const configHome = path.join(directory, "config");
+  await mkdir(repositoryA, { recursive: true });
+  await mkdir(repositoryB, { recursive: true });
+  await mkdir(configHome);
+  const runGit = async (cwd: string, args: readonly string[]) =>
+    (await execFileAsync("git", [...args], { cwd })).stdout.trim();
+  const root = [
+    "apiVersion: casegraph.policeconduct.org/v1alpha1",
+    "kind: Case",
+    "metadata:",
+    "  uid: tz4a98xxat96iws9zmbrgj3a",
+    "spec:",
+    "  resources: []",
+    "",
+  ].join("\n");
+  await runGit(repositoryA, ["init", "--initial-branch=main"]);
+  await runGit(repositoryA, ["config", "user.name", "Repository A"]);
+  await runGit(repositoryA, [
+    "config",
+    "user.email",
+    "repository-a@example.invalid",
+  ]);
+  await writeFile(path.join(repositoryA, "root.yaml"), root);
+  await runGit(repositoryA, ["add", "root.yaml"]);
+  await runGit(repositoryA, ["commit", "-m", "repository A"]);
+  await runGit(repositoryA, ["remote", "add", "origin", "a.example"]);
+
+  await runGit(repositoryB, ["init", "--initial-branch=hostile"]);
+  await runGit(repositoryB, ["config", "user.name", "Repository B"]);
+  await runGit(repositoryB, [
+    "config",
+    "user.email",
+    "repository-b@example.invalid",
+  ]);
+  await writeFile(path.join(repositoryB, "other.txt"), "repository B\n");
+  await runGit(repositoryB, ["add", "other.txt"]);
+  await runGit(repositoryB, ["commit", "-m", "repository B"]);
+  await writeFile(path.join(repositoryB, "root.yaml"), root);
+  await runGit(repositoryB, ["remote", "add", "origin", "b.example"]);
+
+  const commitA = await runGit(repositoryA, ["rev-parse", "HEAD"]);
+  const commitB = await runGit(repositoryB, ["rev-parse", "HEAD"]);
+  expect(commitA).not.toBe(commitB);
+  const indexA = await readFile(path.join(repositoryA, ".git", "index"));
+  const indexB = await readFile(path.join(repositoryB, ".git", "index"));
   const hostileGlobal = path.join(directory, "hostile.gitconfig");
   const tracePath = path.join(directory, "hostile.trace");
   await writeFile(hostileGlobal, "[core]\n\tbare = true\n");
   const previous = { ...process.env };
+  let report: Awaited<ReturnType<typeof inspectGitBackedCaseHome>>;
   try {
     process.env.GIT_DIR = path.join(repositoryB, ".git");
     process.env.GIT_WORK_TREE = repositoryB;
@@ -115,35 +156,53 @@ test("ambient repository selectors cannot make repository B masquerade as A", as
     process.env.GIT_CONFIG_GLOBAL = hostileGlobal;
     process.env.GIT_TRACE = tracePath;
     process.env.Git_Dir = path.join(repositoryB, ".git");
-    const runner = createGitRunner();
-    const topLevel = await runner(
-      ["rev-parse", "--show-toplevel"],
-      repositoryA,
-    );
-    const gitDirectory = await runner(
-      ["rev-parse", "--absolute-git-dir"],
-      repositoryA,
-    );
-    const branch = await runner(["branch", "--show-current"], repositoryA);
-    const bare = await runner(
-      ["rev-parse", "--is-bare-repository"],
-      repositoryA,
-    );
-    expect([topLevel, gitDirectory, branch, bare]).toMatchObject([
-      { exitCode: 0 },
-      { exitCode: 0 },
-      { exitCode: 0 },
-      { exitCode: 0 },
-    ]);
-    const canonicalA = await realpath(repositoryA);
-    expect(topLevel.stdout.trim()).toBe(canonicalA);
-    expect(gitDirectory.stdout.trim()).toBe(path.join(canonicalA, ".git"));
-    expect(branch.stdout.trim()).toBe("main");
-    expect(bare.stdout.trim()).toBe("false");
-    await expect(readFile(tracePath)).rejects.toMatchObject({ code: "ENOENT" });
+    report = await inspectGitBackedCaseHome({
+      caseFolder: caseFolderA,
+      caseId: "PoliceConductUS/repository-a",
+      configHome,
+      selectedRemote: "origin",
+    });
   } finally {
     for (const key of Object.keys(process.env))
       Reflect.deleteProperty(process.env, key);
     Object.assign(process.env, previous);
   }
+  const canonicalA = await realpath(repositoryA);
+  expect(report.classification).toBe("primary");
+  expect(report.repository).toMatchObject({
+    state: "primary",
+    gitDirectory: path.join(canonicalA, ".git"),
+    commonDirectory: path.join(canonicalA, ".git"),
+    topLevel: canonicalA,
+    branch: "main",
+    commit: commitA,
+    dirty: false,
+    rootTrackedInHead: true,
+    remotes: [
+      { name: "origin", fetchUrls: ["a.example"], pushUrls: ["a.example"] },
+    ],
+  });
+  expect(report.repository).not.toMatchObject({
+    branch: "hostile",
+    commit: commitB,
+    dirty: true,
+    rootTrackedInHead: false,
+    remotes: [
+      { name: "origin", fetchUrls: ["b.example"], pushUrls: ["b.example"] },
+    ],
+  });
+  expect(report.recovery.commit).toBe(commitA);
+  expect(report.recovery.remotes).toEqual({
+    state: "known",
+    remotes: [
+      { name: "origin", fetchUrls: ["a.example"], pushUrls: ["a.example"] },
+    ],
+  });
+  await expect(
+    readFile(path.join(repositoryA, ".git", "index")),
+  ).resolves.toEqual(indexA);
+  await expect(
+    readFile(path.join(repositoryB, ".git", "index")),
+  ).resolves.toEqual(indexB);
+  await expect(readFile(tracePath)).rejects.toMatchObject({ code: "ENOENT" });
 });

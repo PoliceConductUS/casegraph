@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 const observedFs = vi.hoisted(() => ({
   lstat: [] as string[],
+  open: [] as string[],
   readFile: [] as string[],
   realpath: [] as string[],
   readdir: [] as string[],
@@ -21,6 +22,12 @@ vi.mock("node:fs/promises", async () => {
     lstat: new Proxy(actual.lstat, {
       apply(target, thisArgument, argumentsList): unknown {
         observedFs.lstat.push(String(argumentsList[0]));
+        return Reflect.apply(target, thisArgument, argumentsList);
+      },
+    }),
+    open: new Proxy(actual.open, {
+      apply(target, thisArgument, argumentsList): unknown {
+        observedFs.open.push(String(argumentsList[0]));
         return Reflect.apply(target, thisArgument, argumentsList);
       },
     }),
@@ -141,9 +148,13 @@ describe("exact child path observation", () => {
         registrationStore: {
           read: async () => {
             registrationReads += 1;
-            await import("node:fs/promises").then(({ realpath }) =>
-              realpath(path.join(canonicalTarget, "root.yaml")),
+            const fs = await import("node:fs/promises");
+            await fs.readFile(path.join(canonicalCaseHome, "root.yaml"));
+            const handle = await fs.open(
+              path.join(canonicalTarget, "root.yaml"),
+              "r",
             );
+            await handle.close();
             return new Map();
           },
         },
@@ -158,6 +169,61 @@ describe("exact child path observation", () => {
     expect(callsAtOrBelow(observedFs.lstat, canonicalTarget)).toEqual([]);
     expect(callsAtOrBelow(observedFs.readFile, canonicalTarget)).toEqual([]);
     expect(callsAtOrBelow(observedFs.readdir, canonicalTarget)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.open, canonicalTarget)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.realpath, canonicalCaseHome)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.readFile, canonicalCaseHome)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.readdir, canonicalCaseHome)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.open, canonicalCaseHome)).toEqual([]);
+    expect(strictOpenCalls).toEqual([]);
+    expect(registrationReads).toBe(0);
+    expect(report.registration.state).toBe("not-inspected");
+  });
+
+  test("lstats a non-directory once without opening or reading the child", async () => {
+    const caseFolder = await mkdtemp(
+      path.join(tmpdir(), "casegraph-file-observer-"),
+    );
+    const configHome = await mkdtemp(
+      path.join(tmpdir(), "casegraph-config-observer-"),
+    );
+    temporaryDirectories.push(caseFolder, configHome);
+    const canonicalCaseFolder = await import("node:fs/promises").then(
+      ({ realpath }) => realpath(caseFolder),
+    );
+    const caseHome = path.join(canonicalCaseFolder, "casegraph");
+    await writeFile(caseHome, "non-directory child\n");
+    for (const calls of Object.values(observedFs)) calls.length = 0;
+    strictOpenCalls.length = 0;
+    let registrationReads = 0;
+
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder,
+        caseId: "PoliceConductUS/non-directory",
+        configHome,
+      },
+      {
+        registrationStore: {
+          read: async () => {
+            registrationReads += 1;
+            const fs = await import("node:fs/promises");
+            await fs.readFile(caseHome);
+            const handle = await fs.open(caseHome, "r");
+            await handle.close();
+            return new Map();
+          },
+        },
+      },
+    );
+
+    expect(report.classification).toBe("conflict");
+    expect(observedFs.lstat.filter((call) => call === caseHome)).toHaveLength(
+      1,
+    );
+    expect(callsAtOrBelow(observedFs.realpath, caseHome)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.readFile, caseHome)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.readdir, caseHome)).toEqual([]);
+    expect(callsAtOrBelow(observedFs.open, caseHome)).toEqual([]);
     expect(strictOpenCalls).toEqual([]);
     expect(registrationReads).toBe(0);
     expect(report.registration.state).toBe("not-inspected");
