@@ -59,11 +59,23 @@ const FailingSelectorDefinition = defineResourceKind({
   },
 });
 
+const MutatingSelectorDefinition = defineResourceKind({
+  kind: "MutatingSelector",
+  category: "node",
+  spec: { references: ResourceUidSchema.array() },
+  resourceReferences: (resource) => {
+    // @ts-expect-error Selector inputs are deeply readonly.
+    resource.spec.references.push(resource.metadata.uid); // eslint-disable-line @typescript-eslint/no-unsafe-call -- This intentionally exercises a compile-time-forbidden mutation.
+    return resource.spec.references;
+  },
+});
+
 const storageSemanticsRegistry = createResourceRegistry([
   CaseResourceDefinition,
   FixtureNodeDefinition,
   FixtureLegalEffectEdgeDefinition,
   FailingSelectorDefinition,
+  MutatingSelectorDefinition,
 ]);
 
 const observedResourceRegistry = createResourceRegistry([
@@ -239,6 +251,20 @@ describe("strict CaseGraph resource kinds", () => {
         "selector.yaml",
       ),
     ).toThrow(/^Invalid CaseGraph resource at selector\.yaml$/);
+  });
+
+  test("rejects selector mutation with the supplied resource path instead of returning a changed inspection", () => {
+    expect(() =>
+      storageSemanticsRegistry.inspect(
+        {
+          apiVersion: validCase.apiVersion,
+          kind: "MutatingSelector",
+          metadata: { uid: secondUid },
+          spec: { references: [firstUid] },
+        },
+        "mutating-selector.yaml",
+      ),
+    ).toThrow(/^Invalid CaseGraph resource at mutating-selector\.yaml$/);
   });
 
   test("accepts a declared status shape", () => {
