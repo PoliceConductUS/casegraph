@@ -14,10 +14,11 @@ resource references and owned paths. Owned paths must begin with `files/` or
 `audits/`, remain relative to their resource folder, and cannot escape it.
 
 Opening a CaseHome validates the root, follows the exact reachable membership,
-handles cycles by UID, and rejects missing resources, root/non-root duplicate
-UIDs, folder/UID mismatches, invalid envelopes, undeclared UID resolution, and
-escaping owned paths. Tests register strict fixture node and legal-effect-edge
-kinds; this change does not invent production graph taxonomies.
+handles cycles by UID, and rejects missing resources, a second authoritative
+root-UID document, folder/UID mismatches, invalid envelopes, undeclared UID
+resolution, and escaping owned paths. Tests register strict fixture node and
+legal-effect-edge kinds; this change does not invent production graph
+taxonomies.
 
 ## Alternatives Considered
 
@@ -67,17 +68,21 @@ keeps all discovery explicit and testable.
   boundary do not encode that distinction.
 - Kind definitions may expose typed resource-reference and owned-path values
   only after their strict schema validates the resource.
-- Repeated references and cycles resolve once by UID; they are not duplicate
-  resources.
-- A duplicate exists when the Case root UID is also named as a non-root member;
-  canonical UID folders otherwise provide one authoritative non-root location.
+- Repeated references, direct Case self-references, and transitive references
+  back to the Case root resolve once by UID; they are cycles, not duplicates.
+- A duplicate root identity exists only when both `<casehome>/root.yaml` and
+  `<casehome>/<root-uid>/root.yaml` claim the Case root UID. The boundary checks
+  that one known shadow path without scanning other directories.
 - An API request to resolve a UID outside the rooted membership fails even if a
   matching directory exists.
 - Owned paths are normalized only for validation; the stored value is not
-  rewritten. Absolute paths, `..`, empty paths, and paths outside `files/` or
-  `audits/` fail.
+  rewritten. Absolute paths, `..`, empty paths, bare `files`/`audits`
+  directories, and paths outside those directories fail. Existing path
+  segments are realpath-checked so symlinks cannot escape the resource folder.
 - The boundary validates owned paths but does not require owned files to exist;
   missing-file behavior belongs to the concrete kind that requires that file.
+- The snapshot exposes membership queries and a count, not discovery order;
+  traversal order remains outside this change.
 - Legacy `CaseHome`, `CaseLocator`, flat graph records, and `cases new` remain
   untouched in this stack layer.
 

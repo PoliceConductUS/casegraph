@@ -116,9 +116,11 @@ OpenSpec.
   Cover:
   - Case root at `<casehome>/root.yaml` plus a non-root node at
     `<casehome>/<uid>/root.yaml`;
+  - missing, malformed, schema-invalid, and valid non-Case root documents;
   - a legal-effect edge resolved by the same UID-only method;
   - transitive typed references;
-  - repeated references and A↔B cycles resolving once per UID;
+  - repeated references, direct Case self-reference, a non-root reference back
+    to the Case root, and A↔B cycles resolving once per UID;
   - a valid but unreferenced UID directory excluded from membership and refused
     by `resolve`;
   - rejection of composite/path resolution input through the existing UID
@@ -143,8 +145,8 @@ OpenSpec.
      `<casehome>/<uid>/root.yaml`;
   6. records immutable resolved entries containing resource, category, and
      owned paths;
-  7. exposes an ordered `resourceUids` snapshot and `resolve(unknown)` that
-     validates one UID and refuses non-members.
+  7. exposes a membership count and `resolve(unknown)` that validates one UID
+     and refuses non-members without exposing discovery order.
 
   Do not recursively scan, cache across calls, expose arbitrary paths, or add a
   general traversal framework.
@@ -178,9 +180,10 @@ OpenSpec.
 - [ ] **Step 1: Add failing canonical-storage tests**
 
   Add focused cases for a missing referenced `root.yaml`, folder UID A
-  containing UID B, the Case root UID referenced as a non-root member, malformed
-  YAML, unknown kind, and a strict schema failure. Assert diagnostics include
-  the UID/path or expected-versus-actual identity required to locate the defect.
+  containing UID B, a second `<casehome>/<root-uid>/root.yaml` claiming the Case
+  root UID, malformed YAML, unknown kind, and a strict schema failure. Assert
+  diagnostics include the UID/path or expected-versus-actual identity required
+  to locate the defect.
 
 - [ ] **Step 2: Add failing owned-path tests**
 
@@ -190,7 +193,12 @@ OpenSpec.
   - empty path;
   - absolute path;
   - `../outside` or another `..` segment;
+  - bare `files` or `audits`;
   - a relative path outside `files/` and `audits/`.
+
+  Also create an existing symlink segment that resolves outside the resource
+  folder and prove opening rejects it. Prove a missing final file remains valid
+  when its existing ancestors are contained.
 
 - [ ] **Step 3: Run the focused test and record RED**
 
@@ -206,11 +214,14 @@ OpenSpec.
 
   In `casehome-resources.ts`:
   - compare each non-root envelope UID with its requested folder UID;
-  - reject the root UID before reading it as non-root membership;
+  - resolve direct and transitive references to the root UID as cycles;
+  - reject a second authoritative document at
+    `<casehome>/<root-uid>/root.yaml` without scanning directories;
   - preserve reader validation context from the canonical path;
-  - validate owned paths as non-empty, non-absolute, segment-safe paths whose
-    first segment is `files` or `audits`;
-  - resolve and verify the absolute result remains inside the resource folder;
+  - validate owned paths as non-empty, non-absolute, segment-safe file paths
+    below `files/` or `audits/`, rejecting either bare directory;
+  - verify lexical containment and realpath containment for every existing path
+    segment, while permitting a missing suffix after contained ancestors;
   - build the snapshot locally and return it only after every member succeeds.
 
 - [ ] **Step 5: Run focused resource tests and record GREEN**

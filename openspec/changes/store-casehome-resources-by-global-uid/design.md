@@ -50,15 +50,17 @@ No category is encoded in a UID, folder, or reference.
 
 `openCaseHomeResources(caseHomePath, registry)` reads
 `<casehome>/root.yaml`, requires kind `Case`, and follows its typed references
-depth-first with a visited-UID set. Each first-seen non-root UID resolves only
-from `<casehome>/<uid>/root.yaml`. The function returns an immutable snapshot
-containing the validated root and a UID-keyed membership map. Traversal order
-is not exposed as product behavior.
+with a visited-UID set. Each first-seen non-root UID resolves only from
+`<casehome>/<uid>/root.yaml`. The function returns an immutable snapshot
+containing the validated root and a UID-keyed membership map. It exposes a
+membership count and UID-only resolution, not discovery order.
 
 A repeated reference to an already visited UID represents the same resource
-and terminates that branch, which supports cycles. The root UID appearing as a
-non-root reference is rejected as a duplicate authoritative identity rather
-than treated as a cycle.
+and terminates that branch, which supports cycles. This includes a direct Case
+self-reference and a non-root resource that refers back to the Case root. A
+duplicate exists instead when `<casehome>/<root-uid>/root.yaml` creates a second
+authoritative document claiming the root UID; the boundary checks that one
+known shadow path without recursively scanning directories.
 
 ### Resolve only snapshot membership
 
@@ -70,11 +72,13 @@ unreferenced path traversal.
 ### Validate canonical paths and owned containment
 
 After reading a non-root document, its `metadata.uid` must equal the folder UID.
-Owned paths returned by the kind definition must be non-empty relative paths,
-must begin with `files/` or `audits/`, and must remain inside the owning
-resource folder after resolution. Absolute paths and any `..` segment fail.
-The snapshot reports normalized absolute owned paths without rewriting the
-stored resource value.
+Owned paths returned by the kind definition must be non-empty relative file
+paths below `files/` or `audits/`; the bare directory names, absolute paths, and
+any `..` segment fail. Lexical containment is always checked. Every existing
+path segment is also resolved so a symlink cannot escape the owning resource
+folder. A missing final path is allowed after its existing ancestors pass,
+because existence belongs to the concrete kind contract. The snapshot reports
+normalized absolute owned paths without rewriting the stored resource value.
 
 ### Keep storage eager and direct
 

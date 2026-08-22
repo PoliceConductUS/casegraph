@@ -16,6 +16,24 @@ validated resource's `metadata.uid`, and the system MUST NOT create or depend on
 - **THEN** opening the CaseHome returns both the root and non-root resource as
   members
 
+#### Scenario: Missing CaseHome root is rejected
+
+- **WHEN** `<casehome>/root.yaml` does not exist
+- **THEN** opening fails with an error identifying the required root path
+
+#### Scenario: Invalid CaseHome root is rejected
+
+- **WHEN** `<casehome>/root.yaml` is malformed or fails its selected strict
+  schema
+- **THEN** opening fails with validation context for the CaseHome root path
+
+#### Scenario: Non-Case root kind is rejected
+
+- **WHEN** `<casehome>/root.yaml` is a valid registered resource whose kind is
+  not `Case`
+- **THEN** opening fails because only a Case resource can establish CaseHome
+  membership
+
 #### Scenario: Folder and resource UID mismatch is rejected
 
 - **WHEN** the Case root references UID A
@@ -41,6 +59,19 @@ NOT recursively scan directories for members.
   A
 - **THEN** opening succeeds without reading either resource more than once
 - **THEN** membership contains A and B exactly once
+
+#### Scenario: References to the Case root are cycles
+
+- **WHEN** the Case root directly references its own UID or a reachable
+  non-root resource references the Case root UID
+- **THEN** opening treats the reference as an already resolved member
+- **THEN** the Case root appears in membership exactly once
+
+#### Scenario: Repeated references identify one resource
+
+- **WHEN** two rooted typed properties reference the same non-root UID
+- **THEN** opening reads and records that canonical resource once
+- **THEN** the repeated reference is not treated as a duplicate UID
 
 #### Scenario: Unreferenced directory is not a member
 
@@ -88,11 +119,25 @@ inside that resource folder after path resolution.
   owned-path property references it
 - **THEN** the opened resource does not report that file as owned content
 
-#### Scenario: Escaping owned path is rejected
+#### Scenario: Lexically escaping or bare owned path is rejected
 
 - **WHEN** a typed owned-path property is absolute, contains a `..` segment,
-  lies outside `files/` and `audits/`, or resolves outside the resource folder
+  equals bare `files` or `audits`, or lies outside those directories
 - **THEN** opening the CaseHome fails without returning a partial snapshot
+
+#### Scenario: Existing symlink escape is rejected
+
+- **WHEN** any existing segment of a typed owned path is a symlink that resolves
+  outside the canonical resource folder
+- **THEN** opening the CaseHome fails without returning a partial snapshot
+
+#### Scenario: Missing owned file is storage-valid
+
+- **WHEN** a typed owned path is lexically contained and all existing ancestor
+  segments remain inside the resource folder but the final file does not exist
+- **THEN** the storage boundary accepts the path
+- **THEN** the concrete resource kind remains responsible for requiring file
+  existence when needed
 
 ### Requirement: Reject Invalid Or Ambiguous Resource Storage
 
@@ -111,11 +156,12 @@ cannot be resolved through its canonical UID folder.
   kind, or fails its selected strict schema
 - **THEN** opening fails with the resource path and validation context
 
-#### Scenario: Root UID duplicated as non-root membership is rejected
+#### Scenario: Second authoritative root-UID document is rejected
 
-- **WHEN** `Case.spec.resources` contains the Case root's own `metadata.uid`
-- **THEN** opening fails because one UID cannot identify both the Case root and
-  a non-root resource folder
+- **WHEN** `<casehome>/root.yaml` has UID A
+- **AND** `<casehome>/<UID-A>/root.yaml` also claims UID A
+- **THEN** opening fails because two authoritative documents claim one global
+  resource UID
 
 #### Scenario: Composite or path identity is not accepted
 
