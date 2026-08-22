@@ -8,10 +8,10 @@
 
 ## 2. Strict Kind Definitions And Dispatch
 
-- [ ] 2.1 Add focused failing tests for the initial `Case` definition,
+- [x] 2.1 Add focused failing tests for the initial `Case` definition,
       schema-declared status, exact API/kind dispatch, unknown fields at every
       envelope level, and recognized fields in the wrong section.
-- [ ] 2.2 Implement strict kind definitions, the first `Case` resource, and
+- [x] 2.2 Implement strict kind definitions, the first `Case` resource, and
       exact registry dispatch without a catch-all resource schema, then make the
       focused tests pass.
 
