@@ -12,6 +12,7 @@ import { parseResourceReference, type ResourceUid } from "../resource-uid.js";
 
 export interface CaseHomeResourceSnapshot {
   readonly count: number;
+  readonly documentPaths: readonly string[];
   resolve(value: unknown): ResourceInspection;
 }
 
@@ -180,8 +181,9 @@ export async function openCaseHomeResources(
   caseHomePath: string,
   registry: ResourceRegistry,
 ): Promise<CaseHomeResourceSnapshot> {
-  const canonicalCaseHomePath = resolvePath(caseHomePath);
-  const realCaseHomePath = await realpath(canonicalCaseHomePath);
+  const requestedCaseHomePath = resolvePath(caseHomePath);
+  const realCaseHomePath = await realpath(requestedCaseHomePath);
+  const canonicalCaseHomePath = requestedCaseHomePath;
   const rootPath = join(canonicalCaseHomePath, "root.yaml");
   await validateCaseHomeDocumentPath(
     rootPath,
@@ -195,6 +197,7 @@ export async function openCaseHomeResources(
   }
 
   const members = new Map<ResourceUid, ResourceInspection>();
+  const documentPaths = [join(realCaseHomePath, "root.yaml")];
   const rootUid = parseResourceReference(inspectedRoot.resource.metadata.uid);
   const root = await normalizeOwnedPaths(
     inspectedRoot,
@@ -266,11 +269,13 @@ export async function openCaseHomeResources(
       resourcePath,
     );
     members.set(uid, member);
+    documentPaths.push(join(realCaseHomePath, uid, "root.yaml"));
     pending.push(...member.resourceReferences);
   }
 
   return Object.freeze({
     count: members.size,
+    documentPaths: Object.freeze([...documentPaths].sort()),
     resolve(value: unknown): ResourceInspection {
       const uid = parseResourceReference(value);
       const member = members.get(uid);

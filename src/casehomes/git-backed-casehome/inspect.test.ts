@@ -8,6 +8,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,13 +51,16 @@ async function initializeRepository(directory: string): Promise<void> {
   await git(directory, ["config", "user.email", "casegraph@example.invalid"]);
 }
 
-function strictCaseRoot(resources: readonly string[] = []): string {
+function strictCaseRoot(
+  resources: readonly string[] = [],
+  uid = CASE_UID,
+): string {
   const resourceLines = resources.map((uid) => `    - ${uid}`).join("\n");
   return [
     "apiVersion: casegraph.policeconduct.org/v1alpha1",
     "kind: Case",
     "metadata:",
-    `  uid: ${CASE_UID}`,
+    `  uid: ${uid}`,
     "spec:",
     resources.length === 0
       ? "  resources: []"
@@ -130,6 +134,15 @@ async function snapshotRepository(caseHome: string, configHome: string) {
     return files;
   }
 
+  const rawState = {
+    files: await snapshotFiles(caseHome),
+    root: await optionalBytes(path.join(caseHome, "root.yaml")),
+    config: await optionalBytes(path.join(caseHome, "config.yaml")),
+    lock: await optionalBytes(path.join(caseHome, "casegraph.lock.yaml")),
+    index: await optionalBytes(path.join(caseHome, ".git", "index")),
+    registration: await optionalBytes(path.join(configHome, "casehomes.yaml")),
+  };
+
   const commands = [
     ["status", "--porcelain=v1"],
     ["show-ref"],
@@ -164,12 +177,7 @@ async function snapshotRepository(caseHome: string, configHome: string) {
   }
 
   return {
-    files: await snapshotFiles(caseHome),
-    root: await optionalBytes(path.join(caseHome, "root.yaml")),
-    config: await optionalBytes(path.join(caseHome, "config.yaml")),
-    lock: await optionalBytes(path.join(caseHome, "casegraph.lock.yaml")),
-    index: await optionalBytes(path.join(caseHome, ".git", "index")),
-    registration: await optionalBytes(path.join(configHome, "casehomes.yaml")),
+    ...rawState,
     commandState,
   };
 }
@@ -230,6 +238,11 @@ describe("exact CaseHome candidate inspection", () => {
     const fileFolder = await temporaryDirectory("casegraph-file-child-");
     const fileConfig = await temporaryDirectory("casegraph-config-");
     await writeFile(path.join(fileFolder, "casegraph"), "not a directory\n");
+    const registered = await createCaseHome({ root: strictCaseRoot() });
+    await writeFile(
+      path.join(fileConfig, "casehomes.yaml"),
+      `PoliceConductUS/file: ${await realpath(registered.rootPath)}\n`,
+    );
 
     const target = await temporaryDirectory("casegraph-secret-target-");
     await writeFile(
@@ -239,6 +252,10 @@ describe("exact CaseHome candidate inspection", () => {
     const symlinkFolder = await temporaryDirectory("casegraph-link-child-");
     const symlinkConfig = await temporaryDirectory("casegraph-config-");
     await symlink(target, path.join(symlinkFolder, "casegraph"));
+    await writeFile(
+      path.join(symlinkConfig, "casehomes.yaml"),
+      `PoliceConductUS/link: ${await realpath(registered.rootPath)}\n`,
+    );
 
     const fileReport = await inspectGitBackedCaseHome({
       caseFolder: fileFolder,
@@ -253,8 +270,22 @@ describe("exact CaseHome candidate inspection", () => {
 
     expect(fileReport.classification).toBe("conflict");
     expect(fileReport.diagnostics[0]).toContain("non-directory file");
+    expect(fileReport.resource.state).toBe("not-inspected");
+    expect(fileReport.repository.state).toBe("not-inspected");
+    expect(fileReport.registration.state).toBe("different");
+    expect(fileReport.recovery.paths).toEqual([
+      await realpath(fileFolder),
+      path.join(await realpath(fileFolder), "casegraph"),
+    ]);
     expect(symlinkReport.classification).toBe("conflict");
     expect(symlinkReport.diagnostics[0]).toContain("symbolic link");
+    expect(symlinkReport.resource.state).toBe("not-inspected");
+    expect(symlinkReport.repository.state).toBe("not-inspected");
+    expect(symlinkReport.registration.state).toBe("different");
+    expect(symlinkReport.recovery.paths).toEqual([
+      await realpath(symlinkFolder),
+      path.join(await realpath(symlinkFolder), "casegraph"),
+    ]);
     expect(JSON.stringify(symlinkReport)).not.toContain(
       "SECRET MUST NOT BE READ",
     );
@@ -377,6 +408,69 @@ describe("exact primary Git repository reports", () => {
     ).toEqual(before);
   });
 
+  test("preserves raw stale-stat index bytes while inspecting a committed primary", async () => {
+    const fixture = await createCaseHome({ commit: true });
+    const staleTime = new Date("2001-01-01T00:00:00.000Z");
+    await utimes(fixture.rootPath, staleTime, staleTime);
+    const indexPath = path.join(fixture.caseHome, ".git", "index");
+    const before = await readFile(indexPath);
+
+    await inspectGitBackedCaseHome({
+      caseFolder: fixture.caseFolder,
+      caseId: "PoliceConductUS/stale-index",
+      configHome: fixture.configHome,
+    });
+
+    await expect(readFile(indexPath)).resolves.toEqual(before);
+  });
+
+  test.each([
+    ["different", "PoliceConductUS/example", "PoliceConductUS/example"],
+    [
+      "conflicting-root",
+      "PoliceConductUS/existing",
+      "PoliceConductUS/requested",
+    ],
+  ] as const)(
+    "makes a %s machine registration ineligible and matches registration-store rejection",
+    async (expectedState, registeredCaseId, requestedCaseId) => {
+      const fixture = await createCaseHome({ commit: true });
+      const other = await createCaseHome({ root: strictCaseRoot() });
+      const registeredRoot =
+        expectedState === "different"
+          ? await realpath(other.rootPath)
+          : await realpath(fixture.rootPath);
+      const registrationPath = path.join(fixture.configHome, "casehomes.yaml");
+      await writeFile(
+        registrationPath,
+        `${registeredCaseId}: ${registeredRoot}\n`,
+      );
+      const before = await readFile(registrationPath);
+
+      const report = await inspectGitBackedCaseHome({
+        caseFolder: fixture.caseFolder,
+        caseId: requestedCaseId,
+        configHome: fixture.configHome,
+      });
+
+      expect(report.registration.state).toBe(expectedState);
+      expect(report.registrationEligibility.eligible).toBe(false);
+      expect(report.registrationEligibility.reasons).toEqual([
+        expectedState === "different"
+          ? "case ID is already registered to a different root"
+          : "CaseHome root is already registered to a different case ID",
+      ]);
+      await expect(
+        new CaseHomeRegistrationStore().register({
+          configHome: fixture.configHome,
+          caseId: requestedCaseId,
+          rootPath: fixture.rootPath,
+        }),
+      ).rejects.toThrow("CaseHome registration conflict");
+      await expect(readFile(registrationPath)).resolves.toEqual(before);
+    },
+  );
+
   test("reports detached and unborn exact repositories without inventing a branch or commit", async () => {
     const detached = await createCaseHome({ commit: true });
     await git(detached.caseHome, ["checkout", "--detach"]);
@@ -437,7 +531,7 @@ describe("exact primary Git repository reports", () => {
     const caseHome = path.join(caseFolder, "casegraph");
     await mkdir(caseHome, { recursive: true });
     await writeFile(path.join(caseHome, "root.yaml"), strictCaseRoot());
-    const before = await snapshotRepository(caseHome, configHome);
+    const before = await snapshotRepository(outer, configHome);
 
     const report = await inspectGitBackedCaseHome({
       caseFolder,
@@ -452,7 +546,7 @@ describe("exact primary Git repository reports", () => {
       inheritedTopLevel: await realpath(outer),
     });
     expect(report.resource).toEqual({ state: "valid", count: 1 });
-    expect(await snapshotRepository(caseHome, configHome)).toEqual(before);
+    expect(await snapshotRepository(outer, configHome)).toEqual(before);
   });
 });
 
@@ -604,8 +698,33 @@ describe("ineligible and invalid candidates", () => {
     expect(report.diagnostics.join("\n")).toContain("escapes real CaseHome");
   });
 
-  test("reports Git unavailable and records only non-mutating argument arrays", async () => {
+  test("reuses strict traversal paths for complete multi-resource recovery", async () => {
+    const memberUid = "y2xv0j9f4p7m3n8q6r5s1t2u";
+    const fixture = await createCaseHome({ root: strictCaseRoot([memberUid]) });
+    const memberPath = path.join(fixture.caseHome, memberUid, "root.yaml");
+    await mkdir(path.dirname(memberPath), { recursive: true });
+    await writeFile(memberPath, strictCaseRoot([], memberUid));
+
+    const report = await inspectGitBackedCaseHome({
+      caseFolder: fixture.caseFolder,
+      caseId: "PoliceConductUS/multi-resource",
+      configHome: fixture.configHome,
+    });
+
+    expect(report.resource).toEqual({ state: "valid", count: 2 });
+    expect(report.recovery.paths).toEqual([
+      await realpath(fixture.caseFolder),
+      await realpath(fixture.caseHome),
+      ...[await realpath(fixture.rootPath), await realpath(memberPath)].sort(),
+    ]);
+  });
+
+  test("reports safe resource, registration, and recovery state when Git is unavailable", async () => {
     const fixture = await createCaseHome({ root: strictCaseRoot() });
+    await writeFile(
+      path.join(fixture.configHome, "casehomes.yaml"),
+      `PoliceConductUS/no-git: ${await realpath(fixture.rootPath)}\n`,
+    );
     const observed: { args: readonly string[]; cwd: string }[] = [];
     const unavailable: GitRunner = (args, cwd) => {
       observed.push({ args: [...args], cwd });
@@ -626,8 +745,62 @@ describe("ineligible and invalid candidates", () => {
     );
 
     expect(report.classification).toBe("unavailable");
+    expect(report.resource).toEqual({ state: "valid", count: 1 });
+    expect(report.registration).toEqual({
+      state: "current",
+      registeredRoot: await realpath(fixture.rootPath),
+    });
+    expect(report.recovery).toMatchObject({
+      paths: [
+        await realpath(fixture.caseFolder),
+        await realpath(fixture.caseHome),
+        await realpath(fixture.rootPath),
+      ],
+      resourceCount: 1,
+      remotes: [],
+      registration: "current",
+    });
     expect(report.diagnostics.join("\n")).toContain("Git is unavailable");
-    expect(observed).toEqual([{ args: ["--version"], cwd: process.cwd() }]);
+    expect(observed).toEqual([
+      { args: ["--no-optional-locks", "--version"], cwd: process.cwd() },
+    ]);
+  });
+
+  test("includes observed resource and registry failures when Git is unavailable", async () => {
+    const fixture = await createCaseHome({ root: "malformed: [\n" });
+    await writeFile(
+      path.join(fixture.configHome, "casehomes.yaml"),
+      "malformed: [\n",
+    );
+    const unavailable: GitRunner = () =>
+      Promise.resolve({
+        exitCode: 1,
+        stderr: "spawn git ENOENT",
+        stdout: "",
+      });
+
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder: fixture.caseFolder,
+        caseId: "PoliceConductUS/no-git-invalid",
+        configHome: fixture.configHome,
+      },
+      { git: unavailable },
+    );
+
+    expect(report.resource.state).toBe("invalid");
+    expect(report.registration.state).toBe("invalid");
+    expect(report.registrationEligibility.reasons).toEqual([
+      "Git is unavailable",
+      "strict CaseHome resources are invalid",
+      "machine registration is invalid",
+    ]);
+    expect(report.mutationReadiness.reasons).toEqual([
+      "Git is unavailable",
+      "strict CaseHome resources are invalid",
+    ]);
+    expect(report.diagnostics.join("\n")).toContain(fixture.rootPath);
+    expect(report.diagnostics.join("\n")).toContain("casehomes.yaml");
   });
 
   test("ignores and preserves malformed portable config and arbitrary lock bytes", async () => {
@@ -701,17 +874,39 @@ describe("Git runner boundary", () => {
       },
     );
 
-    expect(observed[0]).toEqual(["--version"]);
-    const forbidden = ["add", "commit", "push", "init", "worktree", "clone"];
-    expect(
-      observed.some(
-        (args) =>
-          args[0] === "remote" &&
-          ["add", "set-url", "remove"].includes(args[1] ?? ""),
-      ),
-    ).toBe(false);
-    expect(observed.some((args) => forbidden.includes(args[0] ?? ""))).toBe(
-      false,
+    expect(observed.every((args) => args[0] === "--no-optional-locks")).toBe(
+      true,
     );
+    const normalize = (args: readonly string[]) =>
+      args[0] === "--no-optional-locks" ? args.slice(1) : [...args];
+    const normalized = observed.map(normalize);
+    expect(normalized[0]).toEqual(["--version"]);
+    const forbidden = ["add", "commit", "push", "init", "worktree", "clone"];
+    const containsMutation = (commands: readonly (readonly string[])[]) =>
+      commands.some(
+        (args) =>
+          (args[0] === "remote" &&
+            ["add", "set-url", "remove"].includes(args[1] ?? "")) ||
+          forbidden.includes(args[0] ?? ""),
+      );
+    expect(
+      containsMutation([
+        normalize([
+          "--no-optional-locks",
+          "remote",
+          "add",
+          "origin",
+          "forbidden",
+        ]),
+        normalize([
+          "--no-optional-locks",
+          "remote",
+          "set-url",
+          "origin",
+          "forbidden",
+        ]),
+      ]),
+    ).toBe(true);
+    expect(containsMutation(normalized)).toBe(false);
   });
 });

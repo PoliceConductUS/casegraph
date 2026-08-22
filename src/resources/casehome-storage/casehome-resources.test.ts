@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -167,8 +174,19 @@ describe("rooted CaseHome resources", () => {
       resourceReferences: [],
       ownedPaths: [],
     });
-    expect(Object.keys(snapshot).sort()).toEqual(["count", "resolve"]);
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+      ].sort(),
+    );
+    expect(Object.keys(snapshot).sort()).toEqual([
+      "count",
+      "documentPaths",
+      "resolve",
+    ]);
     expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
     expect(Object.isFrozen(snapshot.resolve(nodeAUid))).toBe(true);
   });
 
@@ -381,6 +399,13 @@ spec:
     const snapshot = await openCaseHomeResources(caseHomePath, registry);
 
     expect(snapshot.count).toBe(3);
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+        join(await realpath(caseHomePath), nodeBUid, "root.yaml"),
+      ].sort(),
+    );
     expect(snapshot.resolve(nodeAUid).resource.metadata.uid).toBe(nodeAUid);
     expect(snapshot.resolve(nodeBUid).resource.metadata.uid).toBe(nodeBUid);
   });

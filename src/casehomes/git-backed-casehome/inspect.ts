@@ -39,6 +39,7 @@ interface RepositoryDetails {
 
 export type RepositoryReport =
   | { readonly state: "absent" }
+  | { readonly state: "not-inspected"; readonly diagnostic: string }
   | { readonly state: "unavailable"; readonly diagnostic: string }
   | ({ readonly state: "primary" } & RepositoryDetails)
   | ({
@@ -55,6 +56,7 @@ export type RepositoryReport =
 
 export type CaseHomeResourceReport =
   | { readonly state: "absent" }
+  | { readonly state: "not-inspected"; readonly diagnostic: string }
   | { readonly state: "valid"; readonly count: number }
   | { readonly state: "invalid"; readonly diagnostic: string };
 
@@ -312,6 +314,21 @@ async function inspectRegistration(
   }
 }
 
+function registrationConflictReason(
+  registration: RegistrationReport,
+): string | undefined {
+  switch (registration.state) {
+    case "different":
+      return "case ID is already registered to a different root";
+    case "conflicting-root":
+      return "CaseHome root is already registered to a different case ID";
+    case "invalid":
+      return "machine registration is invalid";
+    default:
+      return undefined;
+  }
+}
+
 function deepFreeze<Value>(value: Value): Value {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
     return value;
@@ -348,7 +365,9 @@ export async function inspectGitBackedCaseHome(
   input: InspectGitBackedCaseHomeInput,
   dependencies: InspectGitBackedCaseHomeDependencies = {},
 ): Promise<CaseHomeRepositoryReport> {
-  const git = dependencies.git ?? createGitRunner();
+  const executeGit = dependencies.git ?? createGitRunner();
+  const git: GitRunner = (args, cwd) =>
+    executeGit(["--no-optional-locks", ...args], cwd);
   const registrationStore =
     dependencies.registrationStore ?? new CaseHomeRegistrationStore();
   const caseFolder = await canonicalCaseFolder(input.caseFolder);
@@ -357,31 +376,10 @@ export async function inspectGitBackedCaseHome(
   const paths = { caseFolder, caseHome, root };
 
   const gitProbe = await git(["--version"], process.cwd());
-  if (gitProbe.exitCode !== 0) {
-    const diagnosticText = `Git is unavailable: ${gitProbe.stderr || `exit ${String(gitProbe.exitCode)}`}`;
-    return deepFreeze({
-      classification: "unavailable",
-      paths,
-      resource: { state: "absent" },
-      repository: { state: "unavailable", diagnostic: diagnosticText },
-      registration: { state: "absent" },
-      structuralPushTarget: {
-        ready: false,
-        pushUrls: [],
-        provesWritability: false,
-      },
-      registrationEligibility: {
-        eligible: false,
-        reasons: ["Git is unavailable"],
-      },
-      mutationReadiness: {
-        ready: false,
-        reasons: ["Git is unavailable"],
-      },
-      diagnostics: [diagnosticText],
-      recovery: { paths: [], remotes: [], registration: "absent" },
-    });
-  }
+  const gitUnavailableDiagnostic =
+    gitProbe.exitCode === 0
+      ? undefined
+      : `Git is unavailable: ${gitProbe.stderr || `exit ${String(gitProbe.exitCode)}`}`;
 
   const recoveryPaths: string[] = [];
   if (await exists(caseFolder)) recoveryPaths.push(caseFolder);
@@ -400,28 +398,58 @@ export async function inspectGitBackedCaseHome(
       ? "symbolic link"
       : "non-directory file";
     const message = `Exact CaseHome child ${caseHome} is a ${kind}`;
+    const resourceDiagnostic = `Strict CaseHome resources were not inspected because ${message}`;
+    const repositoryDiagnostic = `Repository was not inspected because ${message}`;
+    const registration = await inspectRegistration(
+      registrationStore,
+      input.configHome,
+      input.caseId,
+      root,
+    );
+    recoveryPaths.push(caseHome);
+    const registrationReason = registrationConflictReason(registration);
+    const reasons = [message];
+    if (registrationReason !== undefined) reasons.push(registrationReason);
     return deepFreeze({
       classification: "conflict",
       paths,
-      resource: { state: "absent" },
-      repository: { state: "absent" },
-      registration: { state: "absent" },
+      resource: { state: "not-inspected", diagnostic: resourceDiagnostic },
+      repository: {
+        state: "not-inspected",
+        diagnostic: repositoryDiagnostic,
+      },
+      registration,
       structuralPushTarget: {
         ready: false,
         pushUrls: [],
         provesWritability: false,
       },
-      registrationEligibility: { eligible: false, reasons: [message] },
-      mutationReadiness: { ready: false, reasons: [message] },
-      diagnostics: [message],
-      recovery: { paths: recoveryPaths, remotes: [], registration: "absent" },
+      registrationEligibility: { eligible: false, reasons },
+      mutationReadiness: { ready: false, reasons },
+      diagnostics: [
+        message,
+        resourceDiagnostic,
+        repositoryDiagnostic,
+        ...(registration.state === "invalid" ? [registration.diagnostic] : []),
+      ],
+      recovery: {
+        paths: recoveryPaths,
+        remotes: [],
+        registration: registration.state,
+      },
     });
   }
 
   if (childEntry === undefined) {
-    const repository = (await exists(caseFolder))
-      ? await inspectRepository(git, caseFolder, caseHome, undefined)
-      : ({ state: "absent" } as const);
+    const repository =
+      gitUnavailableDiagnostic !== undefined
+        ? ({
+            state: "unavailable",
+            diagnostic: gitUnavailableDiagnostic,
+          } as const)
+        : (await exists(caseFolder))
+          ? await inspectRepository(git, caseFolder, caseHome, undefined)
+          : ({ state: "absent" } as const);
     const inherited = repository.state === "inherited";
     const registration = await inspectRegistration(
       registrationStore,
@@ -430,7 +458,12 @@ export async function inspectGitBackedCaseHome(
       root,
     );
     return deepFreeze({
-      classification: inherited ? "inherited" : "absent",
+      classification:
+        gitUnavailableDiagnostic !== undefined
+          ? "unavailable"
+          : inherited
+            ? "inherited"
+            : "absent",
       paths,
       resource: { state: "absent" },
       repository,
@@ -442,14 +475,31 @@ export async function inspectGitBackedCaseHome(
       },
       registrationEligibility: {
         eligible: false,
-        reasons: ["repository is not an exact primary checkout"],
+        reasons: [
+          gitUnavailableDiagnostic === undefined
+            ? "repository is not an exact primary checkout"
+            : "Git is unavailable",
+        ],
       },
       mutationReadiness: {
         ready: false,
-        reasons: ["repository is not an exact primary checkout"],
+        reasons: [
+          gitUnavailableDiagnostic === undefined
+            ? "repository is not an exact primary checkout"
+            : "Git is unavailable",
+        ],
       },
       diagnostics:
-        registration.state === "invalid" ? [registration.diagnostic] : [],
+        registration.state === "invalid"
+          ? [
+              ...(gitUnavailableDiagnostic === undefined
+                ? []
+                : [gitUnavailableDiagnostic]),
+              registration.diagnostic,
+            ]
+          : gitUnavailableDiagnostic === undefined
+            ? []
+            : [gitUnavailableDiagnostic],
       recovery: {
         paths: recoveryPaths,
         remotes: repository.state === "inherited" ? repository.remotes : [],
@@ -465,13 +515,9 @@ export async function inspectGitBackedCaseHome(
   const entries = await readdir(canonicalHome);
   const isEmpty = entries.length === 0;
   const rootExists = await exists(paths.root);
-  if (rootExists) recoveryPaths.push(paths.root);
-  for (const reservedName of ["config.yaml", "casegraph.lock.yaml"] as const) {
-    const reservedPath = path.join(canonicalHome, reservedName);
-    if (await exists(reservedPath)) recoveryPaths.push(reservedPath);
-  }
 
   let resource: CaseHomeResourceReport = { state: "absent" };
+  let resourceDocumentPaths: readonly string[] = [];
   if (!isEmpty) {
     try {
       const snapshot = await openCaseHomeResources(
@@ -479,20 +525,28 @@ export async function inspectGitBackedCaseHome(
         CaseResourceRegistry,
       );
       resource = { state: "valid", count: snapshot.count };
+      resourceDocumentPaths = snapshot.documentPaths;
     } catch (error) {
       resource = { state: "invalid", diagnostic: diagnostic(error) };
     }
+  }
+  if (resource.state === "valid") {
+    recoveryPaths.push(...resourceDocumentPaths);
+  } else if (rootExists) {
+    recoveryPaths.push(paths.root);
+  }
+  for (const reservedName of ["config.yaml", "casegraph.lock.yaml"] as const) {
+    const reservedPath = path.join(canonicalHome, reservedName);
+    if (await exists(reservedPath)) recoveryPaths.push(reservedPath);
   }
 
   const gitEntry = await gitEntryAt(canonicalHome);
   if (gitEntry !== undefined)
     recoveryPaths.push(path.join(canonicalHome, ".git"));
-  const repository = await inspectRepository(
-    git,
-    canonicalHome,
-    canonicalHome,
-    gitEntry,
-  );
+  const repository: RepositoryReport =
+    gitUnavailableDiagnostic === undefined
+      ? await inspectRepository(git, canonicalHome, canonicalHome, gitEntry)
+      : { state: "unavailable", diagnostic: gitUnavailableDiagnostic };
   const registration = await inspectRegistration(
     registrationStore,
     input.configHome,
@@ -515,7 +569,11 @@ export async function inspectGitBackedCaseHome(
     provesWritability: false as const,
   };
   const registrationReasons: string[] = [];
-  if (repository.state !== "primary") {
+  if (repository.state === "unavailable") {
+    registrationReasons.push("Git is unavailable");
+    if (resource.state !== "valid")
+      registrationReasons.push("strict CaseHome resources are invalid");
+  } else if (repository.state !== "primary") {
     registrationReasons.push("repository is not an exact primary checkout");
   } else {
     if (resource.state !== "valid")
@@ -524,11 +582,15 @@ export async function inspectGitBackedCaseHome(
     if (!repository.rootTrackedInHead)
       registrationReasons.push("root.yaml is not tracked in HEAD");
   }
-  if (registration.state === "invalid") {
-    registrationReasons.push("machine registration is invalid");
-  }
+  const registrationReason = registrationConflictReason(registration);
+  if (registrationReason !== undefined)
+    registrationReasons.push(registrationReason);
   const mutationReasons: string[] = [];
-  if (repository.state !== "primary") {
+  if (repository.state === "unavailable") {
+    mutationReasons.push("Git is unavailable");
+    if (resource.state !== "valid")
+      mutationReasons.push("strict CaseHome resources are invalid");
+  } else if (repository.state !== "primary") {
     mutationReasons.push("repository is not an exact primary checkout");
   } else {
     if (resource.state !== "valid")
@@ -542,6 +604,8 @@ export async function inspectGitBackedCaseHome(
   if (resource.state === "invalid") diagnostics.push(resource.diagnostic);
   if (registration.state === "invalid")
     diagnostics.push(registration.diagnostic);
+  if (repository.state === "unavailable")
+    diagnostics.push(repository.diagnostic);
   if (repository.state === "ineligible") {
     diagnostics.push(
       repository.bare
@@ -553,17 +617,19 @@ export async function inspectGitBackedCaseHome(
   }
 
   const classification =
-    resource.state === "invalid"
-      ? "conflict"
-      : repository.state === "primary"
-        ? "primary"
-        : repository.state === "inherited"
-          ? "inherited"
-          : repository.state === "ineligible"
-            ? "conflict"
-            : isEmpty
-              ? "empty"
-              : "non-git";
+    repository.state === "unavailable"
+      ? "unavailable"
+      : resource.state === "invalid"
+        ? "conflict"
+        : repository.state === "primary"
+          ? "primary"
+          : repository.state === "inherited"
+            ? "inherited"
+            : repository.state === "ineligible"
+              ? "conflict"
+              : isEmpty
+                ? "empty"
+                : "non-git";
 
   return deepFreeze({
     classification,
