@@ -35,6 +35,13 @@ branch with its remote. The same transaction boundary applies to graph-mutating
 docket imports and other commands when their OpenSpec contract requires a
 branch.
 
+CaseGraph pushes every commit it creates immediately. There is no successful
+local-only CaseGraph commit state. A push failure leaves the operation active,
+reports the local branch and commit, and cannot be described as completed.
+Finishing an operation pushes its operation-branch commits and the accepted
+primary-branch commit. CaseGraph never deletes the remote operation branch as
+part of abandonment; the remote copy remains available for recovery.
+
 CaseGraph creates operation worktrees below the registered primary CaseHome at:
 
 ```text
@@ -98,4 +105,5 @@ operations rather than graph-schema operations.
 Commands that create durable state must treat branch, worktree, commit, and
 remote synchronization as part of the operation's observable contract before
 implementation. A failed commit or synchronization cannot be reported as a
-completed generation operation.
+completed generation operation. A CaseHome without a configured writable remote
+cannot complete a CaseGraph mutation.
