@@ -80,9 +80,11 @@ reachable member document exactly once. The storage boundary records those
 paths while it opens the rooted graph; it performs no second document read,
 path inspection, or directory scan. Cycles and repeated references contribute
 one path, and unreferenced resources contribute none. The order is presentation
-and recovery order only, never traversal, resource UID, or membership order.
-Inspection copies these paths into the recovery inventory instead of deriving
-resource documents from directory contents.
+and recovery order only. Lexical sorting may visibly sort UID-derived path
+segments, but carries no semantic membership priority and does not preserve or
+reference typed-selector discovery or traversal order. Inspection copies these
+paths into the recovery inventory instead of deriving resource documents from
+directory contents.
 
 The Git boundary executes argument arrays without a shell and disables optional
 Git locks for every repository-inspection command so status/stat refresh cannot
@@ -95,15 +97,28 @@ readiness means a caller-selected remote exists and
 authentication, authorization, or server writability; only `git push` can prove
 those at that moment.
 
-Every report includes a recovery inventory of safely observed directories,
-authoritative `documentPaths`, Git state, commit identity when present,
-configured remotes, and registration state. Reports distinguish observed
-absence from state not inspected after an early Git-unavailable or child-
-identity conflict. A different registration for the requested ID or an inverse
-conflicting-root registration makes registration eligibility false. Inherited
-outer inspection preserves raw index bytes and every pre-existing outer-owned
-file byte. Symlink conflicts report the observable child entry without reading
-its target. Reports distinguish registration eligibility from mutation
+Every report includes `classification`, `paths`, `resource`, `repository`,
+`registration`, `structuralPushTarget`, `registrationEligibility`,
+`mutationReadiness`, `diagnostics`, and `recovery`. The public resource union
+adds `{ state: "not-inspected"; diagnostic: string }`; the repository union adds
+that same not-inspected variant while retaining
+`{ state: "unavailable"; diagnostic: string }` for missing Git. A symlink or
+non-directory exact child returns the two not-inspected variants because child
+identity prevents both strict-resource and repository inspection. Its
+independent machine registry is still read and returns current, different,
+conflicting-root, absent, or invalid with its diagnostic; it is never called
+absent or not inspected merely because the child is unusable.
+
+Git-unavailable inspection of a safely identifiable normal child still opens
+strict resources and reads registration. Only its repository is unavailable.
+Recovery contains the safely observed directories and authoritative
+`documentPaths`, Git state when inspected, commit identity when present,
+configured remotes, and the independently observed registration state. A
+different registration for the requested ID or an inverse conflicting-root
+registration makes registration eligibility false. Inherited outer inspection
+preserves raw index bytes and every pre-existing outer-owned file byte. Symlink
+conflicts `lstat` only the link entry and never open, read, resolve, or enumerate
+the target. Reports distinguish registration eligibility from mutation
 readiness.
 
 ### Prepare local state without claiming durability

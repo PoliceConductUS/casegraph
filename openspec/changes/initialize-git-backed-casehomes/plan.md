@@ -202,6 +202,14 @@ YAML, Zod, Vitest, OpenSpec.
   paths, resource state, repository state, remotes, structural push-target
   state, registration state, mutation readiness, diagnostics, and recovery
   inventory.
+- Modifies: `CaseHomeResourceReport` with exact
+  `{ state: "not-inspected"; diagnostic: string }` and `RepositoryReport` with
+  that exact identity-failure variant while retaining
+  `{ state: "unavailable"; diagnostic: string }` for Git failure.
+- Modifies: the internal inspection dependencies with the narrow filesystem and
+  strict-opener seams needed to count exact-child `lstat`, target reads, and
+  resource opening deterministically in focused tests; production defaults
+  remain the existing Node and strict-resource functions.
 
 - [ ] **Step 1: Build real temporary Git fixture helpers in the test file**
 
@@ -224,11 +232,21 @@ YAML, Zod, Vitest, OpenSpec.
   In `casehome-resources.test.ts`, write REDs proving `documentPaths` contains
   the canonical root and all direct/transitive authoritative member documents
   once, cycles/repeats once, and unreferenced documents zero times. Prove the
-  array is frozen and lexicographically sorted even when discovery order differs,
-  every entry has exact canonical containment, and no extra document read/path
-  inspection/directory scan is used to populate it. In `inspect.test.ts`, prove
-  recovery copies those snapshot paths exactly once and does not infer resource
-  paths by scanning the CaseHome.
+  array is frozen and lexicographically sorted even when typed-selector
+  discovery/traversal order differs, every entry has exact canonical
+  containment, and lexical UID-derived segments carry no semantic membership
+  priority.
+
+  Use the existing test-only `observeRegistryReads` counters around exactly one
+  `openCaseHomeResources` call. Assert each rooted canonical document retains
+  exactly one existing `inspectionCount`, every `readCount` remains at its
+  existing value, the unreferenced document has both counts zero, and observing
+  `snapshot.documentPaths` produces zero counter delta. Keep a malformed
+  unreferenced canonical-looking document as the no-traversal witness and add a
+  source-boundary assertion that the extension introduces no `readdir`,
+  `opendir`, glob, or recursive path scan. In `inspect.test.ts`, prove recovery
+  copies the snapshot paths exactly once and does not infer resource paths by
+  scanning the CaseHome.
 
   Add a CaseFolder fixture that is itself a committed repository. With no exact
   child repository, assert inspection reports the inherited root as
@@ -243,17 +261,34 @@ YAML, Zod, Vitest, OpenSpec.
   worktree, `--separate-git-dir`, and submodule. Cover missing Git executable,
   missing or invalid strict root, and rooted resource-storage failure. Assert
   expected Git root/directory/common-directory paths appear where applicable.
-  Prove all repository-inspection Git invocations disable optional locks and a
-  stale-stat fixture leaves raw index bytes unchanged. Prove current,
+  Record every complete Git argument array. Prove all repository-inspection Git
+  invocations disable optional locks and a stale-stat fixture leaves raw index
+  bytes unchanged. Before verb/subcommand checks, strip only an explicit
+  allowlist of approved leading Git global options such as
+  `--no-optional-locks`; do not drop arbitrary options. Prove current,
   different, conflicting-root, absent, and invalid registration states are
   reported and only current/absent non-conflicting state can remain registration-
   eligible when all repository prerequisites pass.
 
-  For Git-unavailable and observable child-conflict exits, prove resource and
-  registration state is reported as not inspected rather than falsely absent,
-  and recovery lists only paths safely observed before return. For a symlinked
-  child, prove the symlink entry is observable in diagnostics/recovery while no
-  target read occurs.
+  For symlink and non-directory exact children, assert every named public field:
+  `classification: "conflict"`; exact `paths`;
+  `CaseHomeResourceReport { state: "not-inspected", diagnostic }`;
+  `RepositoryReport { state: "not-inspected", diagnostic }`; independently
+  inspected registration; false structural/registration/mutation readiness;
+  exact diagnostics; and safely observed recovery. Use the deterministic
+  injected path/strict-opener observer to prove the exact child path receives
+  one `lstat`, target open/read/realpath/readdir and strict-opener counts remain
+  zero, and registration inspection still occurs.
+
+  For Git unavailable with a safely identifiable normal child, assert every
+  named field: `classification: "unavailable"`; canonical `paths`; truthful
+  strict resource state; `RepositoryReport` with
+  `{ state: "unavailable", diagnostic }`; independently inspected registration;
+  false readiness; combined diagnostics; and recovery containing observed
+  `documentPaths`/registration but no Git commit or remotes. Cover valid,
+  invalid, and absent resources plus
+  absent/current/different/conflicting-root/invalid registration, and prove
+  `absent` is returned only after a successful registry read with no mapping.
 
 - [ ] **Step 4: Run inspection tests and record RED**
 
@@ -266,16 +301,20 @@ YAML, Zod, Vitest, OpenSpec.
   Expected: FAIL against the existing boundaries because the snapshot lacks
   `documentPaths`, recovery omits transitive document paths, inspection does not
   disable optional Git locks, conflicting registrations remain eligible, and
-  early exits report uninspected state as absent. The original missing-boundary
-  RED remains historical evidence only in `task-2-report.md`.
+  early exits lack the exact not-inspected variants, skip independent
+  registration, and skip safe resource inspection when only Git is unavailable.
+  The original missing-boundary RED remains historical evidence only in
+  `task-2-report.md`.
 
 - [ ] **Step 5: Implement the direct Git runner and exact inspection**
 
   Extend `CaseHomeResourceSnapshot` with a frozen lexicographically sorted copy
   of canonical authoritative document paths recorded as the root and each
   reachable member is already opened. Do not reread documents, inspect extra
-  paths, scan directories, or encode traversal/UID/membership order. Copy those
-  paths into recovery exactly once.
+  paths, scan directories, preserve/reference typed-selector discovery or
+  traversal order, or assign semantic membership priority. Lexical sorting may
+  visibly order UID-derived path segments. Copy those paths into recovery
+  exactly once.
 
   Use `execFileResult("git", args, { cwd })`; never use a shell command. Disable
   optional locks for every repository-inspection Git invocation. Derive the
@@ -285,11 +324,14 @@ YAML, Zod, Vitest, OpenSpec.
   of whether it names a linked worktree, separate Git directory, or submodule.
   Read Git/remotes through explicit non-mutating commands. Load resources only
   through `openCaseHomeResources` and registration only through Task 1. Treat
-  different and conflicting-root registration as ineligible. On early failure,
-  distinguish not-inspected state from observed absence and inventory only
-  safely observed entries; never read a symlink target. Freeze copied arrays and
-  nested report values. Export inspection from the package entry point without
-  changing `src/cli.ts` or entering Task 3.
+  different and conflicting-root registration as ineligible. Add the exact
+  resource/repository not-inspected variants for child-identity failures, but
+  always inspect independent registration. When Git alone is unavailable,
+  inspect a safely identifiable child's strict resources and registration and
+  mark only the repository unavailable. Populate every named public report
+  field and inventory only safely observed entries; never read a symlink target.
+  Freeze copied arrays and nested report values. Export inspection from the
+  package entry point without changing `src/cli.ts` or entering Task 3.
 
 - [ ] **Step 6: Prove current inspection import and CLI boundaries**
 
@@ -313,10 +355,13 @@ YAML, Zod, Vitest, OpenSpec.
   Temporarily return discovery-order paths without sorting; rerun the focused
   storage test and require only the lexical-order witness to fail. Restore, then
   temporarily append a canonical-looking unreferenced document path; require
-  the unreferenced-zero witness to fail. Restore, then temporarily omit optional
-  lock disabling from inspection; require the stale-stat raw-index witness to
-  fail. Restore production after every mutation and rerun the complete focused
-  GREEN.
+  the unreferenced-zero witness to fail. Restore, then introduce a directory
+  enumeration call and require the no-scan source boundary to fail. Restore,
+  then temporarily omit optional lock disabling from inspection; require the
+  stale-stat raw-index witness to fail. Feed the command audit
+  `['--no-optional-locks', 'remote', 'add', 'origin', 'forbidden']` and require
+  the normalized forbidden-command witness to fail. Restore production after
+  every mutation and rerun the complete focused GREEN.
 
 - [ ] **Step 8: Mark tasks 2.1 and 2.2 complete, commit, and push**
 
@@ -524,19 +569,34 @@ YAML, Zod, Vitest, OpenSpec.
   `finalizeGitBackedCaseHome`, and `registerExistingGitBackedCaseHome` from
   `src/casehomes/git-backed-casehome/index.ts` in the focused tests. Exercise
   every boundary with a `GitRunner` observer that records each argument array
-  and assert:
+  in full. Normalize only approved leading Git global options before identifying
+  the verb and subcommand, then assert:
 
   ```typescript
+  const approvedLeadingGitOptions = new Set(["--no-optional-locks"]);
+  const normalizeGitCommand = (args: readonly string[]): readonly string[] => {
+    let verbIndex = 0;
+    while (approvedLeadingGitOptions.has(args[verbIndex] ?? "")) verbIndex += 1;
+    return args.slice(verbIndex);
+  };
+
   expect(
-    recordedGitArgs.some(
-      (args) =>
-        args[0] === "remote" && (args[1] === "add" || args[1] === "set-url"),
-    ),
+    recordedGitArgs
+      .map(normalizeGitCommand)
+      .some(
+        (args) =>
+          args[0] === "remote" && (args[1] === "add" || args[1] === "set-url"),
+      ),
   ).toBe(false);
   ```
 
   This assertion checks the actual argument structure and therefore catches
-  `['remote', 'add', ...]` and `['remote', 'set-url', ...]`. Also run:
+  `['remote', 'add', ...]`, `['remote', 'set-url', ...]`, and the same forbidden
+  commands after approved leading global options. Mutation-proof the audit by
+  appending
+  `['--no-optional-locks', 'remote', 'add', 'origin', 'forbidden']` to the
+  recorded arrays and require the assertion to fail; then restore the untouched
+  recorded stream. Also run:
 
   ```bash
   rg 'octokit|@actions/github' \

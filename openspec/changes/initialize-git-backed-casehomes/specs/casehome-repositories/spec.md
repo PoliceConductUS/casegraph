@@ -34,9 +34,16 @@ surrounding CaseFolder outside that repository.
 #### Scenario: Symlinked CaseHome child is rejected
 
 - **WHEN** `<case-folder>/casegraph` is a symbolic link
-- **THEN** inspection reports the observed symlink entry and does not report its
-  resource or registration state as inspected or absent
+- **THEN** inspection reports the observed symlink entry
+- **THEN** `resource` is
+  `CaseHomeResourceReport { state: "not-inspected", diagnostic }`
+- **THEN** `repository` is
+  `RepositoryReport { state: "not-inspected", diagnostic }`
+- **THEN** `registration` reports the independently inspected machine registry
+  state rather than inferring `absent` or `not-inspected`
 - **THEN** inspection and preparation fail before reading or writing its target
+- **THEN** inspection performs `lstat` on the exact link entry and performs zero
+  opens, reads, realpath resolutions, or directory enumerations through the link
 - **THEN** the recovery inventory contains only safely observed path state and
   never reads or lists target contents
 - **THEN** no repository, commit, push, or registration is created
@@ -46,10 +53,30 @@ surrounding CaseFolder outside that repository.
 - **WHEN** `<case-folder>/casegraph` is a non-directory file, invalid CaseHome,
   or existing repository with a different top-level
 - **THEN** inspection identifies the conflict
-- **THEN** the report distinguishes safely inspected resource and registration
-  state from state not inspected and inventories only safely observed recovery
-  paths
+- **THEN** a non-directory exact child reports
+  `CaseHomeResourceReport { state: "not-inspected", diagnostic }` and
+  `RepositoryReport { state: "not-inspected", diagnostic }`
+- **THEN** machine registration is independently inspected and recovery
+  inventories only safely observed paths
 - **THEN** preparation fails without changing the child or registration
+
+#### Scenario: Exact child identity failure has complete public state
+
+- **WHEN** the exact `casegraph/` entry is a symlink or non-directory
+- **THEN** `classification` is `"conflict"` and `paths` contains the canonical
+  CaseFolder plus the lexically exact expected CaseHome and root paths without
+  resolving through the invalid child
+- **THEN** `resource` and `repository` are their respective
+  `{ state: "not-inspected", diagnostic }` variants
+- **THEN** `registration` contains the independently inspected registry state
+- **THEN** `structuralPushTarget.ready`,
+  `registrationEligibility.eligible`, and `mutationReadiness.ready` are false
+  with empty push URLs and exact identity-failure and independently observed
+  invalid-registry reasons
+- **THEN** `diagnostics` contains the resource and repository identity
+  diagnostics plus any independent invalid-registry diagnostic
+- **THEN** `recovery` contains only safely observed path entries, no resource
+  count, commit, or remotes, and the observed registration state
 
 ### Requirement: Inspect Repository State Without Mutation
 
@@ -59,6 +86,16 @@ SHALL report enough state to distinguish registration eligibility, structural
 push readiness, mutation readiness, and safe recovery. Every Git command used
 to inspect repository state MUST explicitly disable Git optional locks so
 inspection cannot refresh stale-stat index bytes.
+
+Every `CaseHomeRepositoryReport`, including every early return, MUST contain the
+public fields `classification`, `paths`, `resource`, `repository`,
+`registration`, `structuralPushTarget`, `registrationEligibility`,
+`mutationReadiness`, `diagnostics`, and `recovery`. `CaseHomeResourceReport`
+MUST include `{ state: "not-inspected"; diagnostic: string }` for an exact child
+whose identity prevents strict-resource inspection. `RepositoryReport` MUST
+include `{ state: "not-inspected"; diagnostic: string }` for that same identity
+failure and `{ state: "unavailable"; diagnostic: string }` when Git itself is
+unavailable.
 
 #### Scenario: Existing primary repository is fully reported
 
@@ -115,14 +152,40 @@ inspection cannot refresh stale-stat index bytes.
 #### Scenario: Missing Git fails before mutation
 
 - **WHEN** the Git executable required for repository inspection is unavailable
+- **AND** the exact child is a safely identifiable normal directory
 - **THEN** inspection and every repository mutation fail with a diagnostic that
   identifies Git as unavailable
-- **THEN** the report distinguishes resource and registration state that was
-  safely inspected from state that was not inspected and does not report
-  uninspected state as absent
+- **THEN** `classification` is `"unavailable"`
+- **THEN** `paths` contains the safely canonicalized CaseFolder, CaseHome, and
+  root paths
+- **THEN** `repository` is
+  `RepositoryReport { state: "unavailable", diagnostic }`
+- **THEN** strict resources are inspected and `resource` truthfully reports
+  `absent`, `valid`, or `invalid` with its diagnostic
+- **THEN** machine registration is independently inspected and truthfully
+  reports `absent`, `current`, `different`, `conflicting-root`, or `invalid`
+  with its diagnostic
+- **THEN** structural push readiness, registration eligibility, and mutation
+  readiness are false with empty push URLs, the selected remote name if
+  supplied, and the Git-unavailable plus any observed resource/registry reasons
+- **THEN** `diagnostics` contains the Git-unavailable diagnostic plus any strict
+  resource or invalid-registry diagnostic
 - **THEN** the recovery inventory contains only paths and state safely observed
-  before the failure
+  before return, including strict `documentPaths` and registration state when
+  those inspections succeed, and no commit or remote state
 - **THEN** no CaseHome file, repository, commit, push, or registration is created
+
+#### Scenario: Registration inspection is independent on early return
+
+- **WHEN** exact-child identity or Git availability prevents repository
+  inspection
+- **THEN** the system still reads `<config-home>/casehomes.yaml`
+- **THEN** it reports `registration.state: "absent"` only when that read succeeds
+  and contains no applicable mapping
+- **THEN** a registry read or validation failure reports the existing
+  `registration.state: "invalid"` with its diagnostic
+- **THEN** child or Git failure never causes registration to be labeled
+  `not-inspected` or falsely `absent`
 
 ### Requirement: Validate CaseHome Resources Through The Strict Reader
 
@@ -531,7 +594,7 @@ resource, repository, commit, ref, remote, pushed commit, or registration.
 - **THEN** recovery obtains those paths without an additional document read,
   path inspection, or directory scan
 - **THEN** lexicographic recovery presentation does not expose or promise
-  traversal, resource UID, or membership order
+  semantic membership priority or typed-selector discovery or traversal order
 
 #### Scenario: Preparation failure reports existing state
 

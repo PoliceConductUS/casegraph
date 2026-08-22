@@ -12,6 +12,8 @@ registration rules.
 
 - Add a read-only exact repository inspection report for the selected
   CaseFolder and its `casegraph/` child.
+- Report exact early resource and repository discriminants while inspecting
+  machine registration independently whenever its registry is readable.
 - Expose the canonical authoritative document paths already opened by the
   strict rooted-resource snapshot and use them in recovery reporting without a
   second read or directory scan.
@@ -59,8 +61,9 @@ registration rules.
 ### Modified Capabilities
 
 - `casehome-resource-storage`: Add immutable lexically sorted authoritative
-  rooted-document paths to the existing snapshot without defining traversal,
-  UID, or membership order.
+  rooted-document paths to the existing snapshot without preserving
+  typed-selector discovery or traversal order or assigning semantic membership
+  priority.
 
 ## Impact
 

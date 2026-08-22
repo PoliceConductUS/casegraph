@@ -10,9 +10,11 @@ NOT recursively scan directories for members. The returned
 `documentPaths: readonly string[]` containing the canonical authoritative root
 and reachable member resource document paths exactly once, sorted
 lexicographically. The array order is for presentation and recovery only and
-MUST NOT expose or imply traversal order, resource UID order, or membership
-order. The paths MUST be populated from already-opened rooted members without an
-additional document read, path inspection, or directory scan.
+MUST NOT preserve or reference typed-selector discovery order or traversal
+order. Lexical canonical-path presentation MAY visibly sort UID-derived path
+segments, but that visible order carries no semantic membership priority. The
+paths MUST be populated from already-opened rooted members without an additional
+document read, path inspection, or directory scan.
 
 #### Scenario: Transitive typed references become members
 
@@ -67,13 +69,26 @@ additional document read, path inspection, or directory scan.
   `documentPaths`
 - **THEN** populating `documentPaths` does not read, inspect, or scan for it
 
+#### Scenario: Document paths add no resource inspection
+
+- **WHEN** one `openCaseHomeResources` call opens the Case root and reachable
+  rooted members
+- **THEN** each canonical rooted document has exactly the existing
+  once-per-open resource inspection
+- **THEN** an unreferenced canonical-looking document has zero resource reads
+  and zero resource inspections
+- **THEN** exposing or reading `documentPaths` adds zero resource reads, zero
+  resource inspections, zero path inspections, and zero directory scans
+
 #### Scenario: Document paths are immutable and lexicographically sorted
 
 - **WHEN** rooted resources are opened in an order different from lexical path
   order
 - **THEN** `documentPaths` is a frozen readonly array sorted lexicographically
-- **THEN** changing traversal, UID, or membership order does not define the
-  presentation order
+- **THEN** lexical sorting may visibly order UID-derived path segments but does
+  not assign semantic membership priority
+- **THEN** `documentPaths` does not preserve or reference typed-selector
+  discovery order or traversal order
 
 #### Scenario: Document paths preserve exact canonical containment
 
