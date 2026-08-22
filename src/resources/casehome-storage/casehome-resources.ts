@@ -77,7 +77,17 @@ async function validateOwnedPath(
       }
     } catch (error) {
       if (isMissingPathError(error)) {
-        break;
+        try {
+          await lstat(existingPath);
+        } catch (lstatError) {
+          if (isMissingPathError(lstatError)) {
+            break;
+          }
+          throw lstatError;
+        }
+        throw new Error(
+          `Owned path containment is indeterminate for resource ${uid} at ${normalizedPath}`,
+        );
       }
       throw error;
     }

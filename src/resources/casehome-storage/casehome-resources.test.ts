@@ -427,6 +427,26 @@ spec:
     );
   });
 
+  test("rejects an existing dangling symlink before accepting a missing suffix", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourceFolder = join(caseHomePath, nodeAUid);
+    const outsideFolder = await mkdtemp(join(tmpdir(), "casegraph-outside-"));
+    const missingTarget = join(outsideFolder, "missing");
+    temporaryCaseHomes.push(outsideFolder);
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(
+      caseHomePath,
+      nodeAUid,
+      testNode(nodeAUid, [], ["files/escape/source.pdf"]),
+    );
+    await mkdir(join(resourceFolder, "files"));
+    await symlink(missingTarget, join(resourceFolder, "files", "escape"));
+
+    await expect(openCaseHomeResources(caseHomePath, registry)).rejects.toThrow(
+      `Owned path containment is indeterminate for resource ${nodeAUid} at ${join(resourceFolder, "files", "escape", "source.pdf")}`,
+    );
+  });
+
   test("accepts a missing owned-path suffix after contained existing ancestors", async () => {
     const caseHomePath = await createTemporaryCaseHome();
     const resourceFolder = join(caseHomePath, nodeAUid);
