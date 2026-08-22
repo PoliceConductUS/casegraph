@@ -34,6 +34,46 @@ function isContainedPath(parentPath: string, childPath: string): boolean {
   );
 }
 
+async function validateCaseHomeDocumentPath(
+  documentPath: string,
+  caseHomePath: string,
+  realCaseHomePath: string,
+): Promise<void> {
+  if (!isContainedPath(caseHomePath, documentPath)) {
+    throw new Error(
+      `CaseHome resource document escapes real CaseHome at ${documentPath}`,
+    );
+  }
+
+  let existingPath = caseHomePath;
+  for (const segment of relative(caseHomePath, documentPath).split(sep)) {
+    existingPath = join(existingPath, segment);
+    try {
+      const realExistingPath = await realpath(existingPath);
+      if (!isContainedPath(realCaseHomePath, realExistingPath)) {
+        throw new Error(
+          `CaseHome resource document escapes real CaseHome at ${documentPath}`,
+        );
+      }
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        try {
+          await lstat(existingPath);
+        } catch (lstatError) {
+          if (isMissingPathError(lstatError)) {
+            return;
+          }
+          throw lstatError;
+        }
+        throw new Error(
+          `CaseHome resource document containment is indeterminate at ${documentPath}`,
+        );
+      }
+      throw error;
+    }
+  }
+}
+
 async function validateOwnedPath(
   ownedPath: string,
   resourceFolder: string,
@@ -141,7 +181,13 @@ export async function openCaseHomeResources(
   registry: ResourceRegistry,
 ): Promise<CaseHomeResourceSnapshot> {
   const canonicalCaseHomePath = resolvePath(caseHomePath);
+  const realCaseHomePath = await realpath(canonicalCaseHomePath);
   const rootPath = join(canonicalCaseHomePath, "root.yaml");
+  await validateCaseHomeDocumentPath(
+    rootPath,
+    canonicalCaseHomePath,
+    realCaseHomePath,
+  );
   const inspectedRoot = await inspectResourceDocument(rootPath, registry);
 
   if (inspectedRoot.resource.kind !== "Case") {
@@ -159,6 +205,11 @@ export async function openCaseHomeResources(
 
   const duplicateRootPath = join(canonicalCaseHomePath, rootUid, "root.yaml");
   try {
+    await validateCaseHomeDocumentPath(
+      duplicateRootPath,
+      canonicalCaseHomePath,
+      realCaseHomePath,
+    );
     const duplicateRoot = await inspectResourceDocument(
       duplicateRootPath,
       registry,
@@ -185,6 +236,11 @@ export async function openCaseHomeResources(
     const resourcePath = join(resourceFolder, "root.yaml");
     let inspectedMember: ResourceInspection;
     try {
+      await validateCaseHomeDocumentPath(
+        resourcePath,
+        canonicalCaseHomePath,
+        realCaseHomePath,
+      );
       inspectedMember = await inspectResourceDocument(resourcePath, registry);
     } catch (error) {
       if (isMissingPathError(error)) {

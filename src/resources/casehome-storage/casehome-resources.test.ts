@@ -240,6 +240,49 @@ spec: {}
     );
   });
 
+  test("rejects a referenced UID directory symlink before external document inspection", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourceFolder = join(caseHomePath, nodeAUid);
+    const resourcePath = join(resourceFolder, "root.yaml");
+    const externalFolder = await mkdtemp(join(tmpdir(), "casegraph-outside-"));
+    const externalPath = join(externalFolder, "root.yaml");
+    temporaryCaseHomes.push(externalFolder);
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeResourceDocument(externalPath, testNode(nodeAUid), registry);
+    await symlink(externalFolder, resourceFolder);
+    const observed = observeRegistryReads(registry);
+
+    await expect(
+      openCaseHomeResources(caseHomePath, observed.registry),
+    ).rejects.toThrow(
+      `CaseHome resource document escapes real CaseHome at ${resourcePath}`,
+    );
+    expect(observed.inspectionCount(resourcePath)).toBe(0);
+    expect(observed.inspectionCount(externalPath)).toBe(0);
+  });
+
+  test("rejects a referenced root document symlink before external document inspection", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const resourceFolder = join(caseHomePath, nodeAUid);
+    const resourcePath = join(resourceFolder, "root.yaml");
+    const externalFolder = await mkdtemp(join(tmpdir(), "casegraph-outside-"));
+    const externalPath = join(externalFolder, "node.yaml");
+    temporaryCaseHomes.push(externalFolder);
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeResourceDocument(externalPath, testNode(nodeAUid), registry);
+    await mkdir(resourceFolder);
+    await symlink(externalPath, resourcePath);
+    const observed = observeRegistryReads(registry);
+
+    await expect(
+      openCaseHomeResources(caseHomePath, observed.registry),
+    ).rejects.toThrow(
+      `CaseHome resource document escapes real CaseHome at ${resourcePath}`,
+    );
+    expect(observed.inspectionCount(resourcePath)).toBe(0);
+    expect(observed.inspectionCount(externalPath)).toBe(0);
+  });
+
   test("rejects a second authoritative document claiming the Case root UID", async () => {
     const caseHomePath = await createTemporaryCaseHome();
     const duplicatePath = join(caseHomePath, caseUid, "root.yaml");
