@@ -4,8 +4,10 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   readdir,
   realpath,
+  rename,
   rm,
   symlink,
   utimes,
@@ -92,6 +94,44 @@ async function createCaseHome(input?: {
     await git(caseHome, ["commit", "-m", "initial CaseHome"]);
   }
   return { caseFolder, caseHome, configHome, rootPath };
+}
+
+async function moveGitDirectoryBehindSymlink(caseHome: string): Promise<{
+  readonly externalGitDirectory: string;
+  readonly gitLink: string;
+}> {
+  const externalRoot = await temporaryDirectory("casegraph-external-git-");
+  const externalGitDirectory = path.join(externalRoot, "metadata.git");
+  const gitLink = path.join(caseHome, ".git");
+  await rename(gitLink, externalGitDirectory);
+  await symlink(externalGitDirectory, gitLink, "dir");
+  return { externalGitDirectory, gitLink };
+}
+
+async function snapshotDirectoryBytes(
+  directory: string,
+  relativeDirectory = "",
+): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const entries = await readdir(path.join(directory, relativeDirectory), {
+    withFileTypes: true,
+  });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const relativePath = path.join(relativeDirectory, entry.name);
+    const entryPath = path.join(directory, relativePath);
+    if (entry.isDirectory()) {
+      Object.assign(
+        files,
+        await snapshotDirectoryBytes(directory, relativePath),
+      );
+    } else if (entry.isSymbolicLink()) {
+      files[relativePath] = `link:${await readlink(entryPath)}`;
+    } else {
+      files[relativePath] = (await readFile(entryPath)).toString("base64");
+    }
+  }
+  return files;
 }
 
 async function snapshotRepository(caseHome: string, configHome: string) {
@@ -1005,6 +1045,394 @@ describe("ineligible and invalid candidates", () => {
   });
 });
 
+describe("symbolic-link Git metadata", () => {
+  test("reports a real external .git symlink exactly without mutation", async () => {
+    const fixture = await createCaseHome({ commit: true });
+    const remoteUrl = "https://example.invalid/casehome.git";
+    await git(fixture.caseHome, ["remote", "add", "origin", remoteUrl]);
+    await new CaseHomeRegistrationStore().register({
+      configHome: fixture.configHome,
+      caseId: "PoliceConductUS/git-symlink",
+      rootPath: fixture.rootPath,
+    });
+    const { externalGitDirectory, gitLink } =
+      await moveGitDirectoryBehindSymlink(fixture.caseHome);
+    const canonicalFolder = await realpath(fixture.caseFolder);
+    const canonicalHome = await realpath(fixture.caseHome);
+    const canonicalRoot = path.join(canonicalHome, "root.yaml");
+    const canonicalGitLink = path.join(canonicalHome, ".git");
+    const canonicalExternalGit = await realpath(externalGitDirectory);
+    const beforeRepository = await snapshotRepository(
+      fixture.caseHome,
+      fixture.configHome,
+    );
+    const beforeMetadata = await snapshotDirectoryBytes(externalGitDirectory);
+    const beforeLinkTarget = await readlink(gitLink);
+
+    const report = await inspectGitBackedCaseHome({
+      caseFolder: fixture.caseFolder,
+      caseId: "PoliceConductUS/git-symlink",
+      configHome: fixture.configHome,
+      selectedRemote: "origin",
+    });
+
+    const reason = `Exact CaseHome uses an ineligible symbolic-link .git entry at ${canonicalGitLink}`;
+    expect(report.classification).toBe("conflict");
+    expect(report.paths).toEqual({
+      caseFolder: canonicalFolder,
+      caseHome: canonicalHome,
+      root: canonicalRoot,
+    });
+    expect(report.resource).toEqual({ state: "valid", count: 1 });
+    expect(report.registration).toEqual({
+      state: "current",
+      registeredRoot: canonicalRoot,
+    });
+    expect(report.repository).toMatchObject({
+      state: "ineligible",
+      reason: "git-symlink",
+      bare: false,
+      expectedTopLevel: canonicalHome,
+      topLevel: canonicalHome,
+      gitDirectory: canonicalExternalGit,
+      commonDirectory: canonicalExternalGit,
+      branch: "main",
+      detached: false,
+      unborn: false,
+      dirty: false,
+      rootTrackedInHead: true,
+      remotes: [
+        { name: "origin", fetchUrls: [remoteUrl], pushUrls: [remoteUrl] },
+      ],
+    });
+    expect(report.repository).not.toHaveProperty("gitFile");
+    if (
+      report.repository.state !== "ineligible" ||
+      report.repository.reason !== "git-symlink"
+    )
+      throw new Error("expected symbolic-link Git metadata report");
+    expect(report.repository.commit).toMatch(/^[0-9a-f]{40}$/u);
+    expect(report.diagnostics).toEqual([reason]);
+    expect(report.registrationEligibility).toEqual({
+      eligible: false,
+      reasons: [reason],
+    });
+    expect(report.mutationReadiness).toEqual({
+      ready: false,
+      reasons: [reason],
+    });
+    expect(report.structuralPushTarget).toEqual({
+      state: "known",
+      ready: true,
+      remote: "origin",
+      pushUrls: [remoteUrl],
+      provesWritability: false,
+    });
+    expect(report.recovery).toEqual({
+      paths: [canonicalFolder, canonicalHome, canonicalRoot, canonicalGitLink],
+      resourceCount: 1,
+      commit: report.repository.commit,
+      remotes: {
+        state: "known",
+        remotes: [
+          { name: "origin", fetchUrls: [remoteUrl], pushUrls: [remoteUrl] },
+        ],
+      },
+      registration: "current",
+    });
+    expect(JSON.stringify(report)).not.toContain("mismatched-top-level");
+    expect(JSON.stringify(report)).not.toContain("does not equal");
+    expect(await readlink(gitLink)).toBe(beforeLinkTarget);
+    expect(await snapshotDirectoryBytes(externalGitDirectory)).toEqual(
+      beforeMetadata,
+    );
+    expect(
+      await snapshotRepository(fixture.caseHome, fixture.configHome),
+    ).toEqual(beforeRepository);
+  });
+
+  test("uses the git-symlink reason before a truthful differing top-level", async () => {
+    const fixture = await createCaseHome({ root: strictCaseRoot() });
+    const externalRoot = await temporaryDirectory("casegraph-git-link-");
+    const externalGitDirectory = path.join(externalRoot, "metadata.git");
+    await mkdir(externalGitDirectory);
+    await symlink(externalGitDirectory, path.join(fixture.caseHome, ".git"));
+    const canonicalHome = await realpath(fixture.caseHome);
+    const otherTopLevel = path.join(await realpath(externalRoot), "other");
+    const commands: string[] = [];
+    const runner: GitRunner = (args) => {
+      const command = args.slice(1).join(" ");
+      commands.push(command);
+      const outputs: Record<string, string> = {
+        "--version": "git version test\n",
+        "rev-parse --absolute-git-dir": `${externalGitDirectory}\n`,
+        "rev-parse --path-format=absolute --git-common-dir": `${externalGitDirectory}\n`,
+        "rev-parse --is-bare-repository": "false\n",
+        "rev-parse --verify --quiet HEAD": `${"a".repeat(40)}\n`,
+        "branch --show-current": "main\n",
+        "for-each-ref --format=%(upstream:short) refs/heads/main": "",
+        "rev-parse --show-toplevel": `${otherTopLevel}\n`,
+        "status --porcelain=v1": "",
+        "ls-tree --name-only HEAD -- root.yaml": "root.yaml\n",
+        remote: "",
+      };
+      return Promise.resolve({
+        exitCode: 0,
+        stderr: "",
+        stdout: outputs[command] ?? "",
+      });
+    };
+
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder: fixture.caseFolder,
+        caseId: "PoliceConductUS/git-symlink-mismatch",
+        configHome: fixture.configHome,
+      },
+      { git: runner },
+    );
+
+    const reason = `Exact CaseHome uses an ineligible symbolic-link .git entry at ${path.join(canonicalHome, ".git")}`;
+    expect(report.repository).toMatchObject({
+      state: "ineligible",
+      reason: "git-symlink",
+      expectedTopLevel: canonicalHome,
+      topLevel: otherTopLevel,
+      gitDirectory: externalGitDirectory,
+      commonDirectory: externalGitDirectory,
+    });
+    expect(report.repository).not.toHaveProperty("gitFile");
+    expect(report.diagnostics).toEqual([reason]);
+    expect(report.registrationEligibility.reasons).toEqual([reason]);
+    expect(report.mutationReadiness.reasons).toEqual([reason]);
+    expect(commands.at(-1)).toBe("remote");
+  });
+
+  test.each(["dangling", "non-git"] as const)(
+    "keeps a real %s .git symlink unavailable",
+    async (targetState) => {
+      const fixture = await createCaseHome({ root: strictCaseRoot() });
+      const externalRoot = await temporaryDirectory("casegraph-git-link-");
+      const target = path.join(externalRoot, "metadata.git");
+      if (targetState === "non-git") await mkdir(target);
+      const gitLink = path.join(fixture.caseHome, ".git");
+      await symlink(target, gitLink);
+      const canonicalFolder = await realpath(fixture.caseFolder);
+      const canonicalHome = await realpath(fixture.caseHome);
+      const canonicalRoot = path.join(canonicalHome, "root.yaml");
+      const canonicalGitLink = path.join(canonicalHome, ".git");
+      const rootBefore = await readFile(fixture.rootPath);
+      const targetBefore =
+        targetState === "non-git" ? await snapshotDirectoryBytes(target) : null;
+
+      const report = await inspectGitBackedCaseHome({
+        caseFolder: fixture.caseFolder,
+        caseId: `PoliceConductUS/git-symlink-${targetState}`,
+        configHome: fixture.configHome,
+        selectedRemote: "origin",
+      });
+
+      expect(report.classification).toBe("unavailable");
+      expect(report.repository.state).toBe("unavailable");
+      if (report.repository.state !== "unavailable")
+        throw new Error("expected unavailable repository");
+      expect(Object.keys(report.repository).sort()).toEqual([
+        "diagnostic",
+        "state",
+      ]);
+      expect(report.repository.diagnostic).toContain(
+        "git rev-parse --absolute-git-dir",
+      );
+      expect(report.structuralPushTarget).toMatchObject({
+        state: "unavailable",
+        ready: false,
+        remote: "origin",
+        provesWritability: false,
+      });
+      expect(report.structuralPushTarget).not.toHaveProperty("pushUrls");
+      expect(report.recovery.remotes).toMatchObject({ state: "unavailable" });
+      expect(report.recovery.remotes).not.toHaveProperty("remotes");
+      expect(report.recovery.paths).toEqual([
+        canonicalFolder,
+        canonicalHome,
+        canonicalRoot,
+        canonicalGitLink,
+      ]);
+      expect(JSON.stringify(report)).not.toContain("git-symlink");
+      expect(JSON.stringify(report)).not.toContain("mismatched-top-level");
+      expect(await readlink(gitLink)).toBe(target);
+      expect(await readFile(fixture.rootPath)).toEqual(rootBefore);
+      if (targetBefore !== null)
+        expect(await snapshotDirectoryBytes(target)).toEqual(targetBefore);
+    },
+  );
+
+  test("keeps a real .git symlink to bare metadata in the bare variant", async () => {
+    const fixture = await createCaseHome({ root: strictCaseRoot() });
+    const externalRoot = await temporaryDirectory("casegraph-linked-bare-");
+    const bareGit = path.join(externalRoot, "metadata.git");
+    await git(externalRoot, [
+      "init",
+      "--bare",
+      "--initial-branch=main",
+      bareGit,
+    ]);
+    const gitLink = path.join(fixture.caseHome, ".git");
+    await symlink(bareGit, gitLink);
+    const canonicalGitLink = path.join(
+      await realpath(fixture.caseHome),
+      ".git",
+    );
+    const commands: string[] = [];
+    const production = createGitRunner();
+
+    const report = await inspectGitBackedCaseHome(
+      {
+        caseFolder: fixture.caseFolder,
+        caseId: "PoliceConductUS/git-symlink-bare",
+        configHome: fixture.configHome,
+      },
+      {
+        git: async (args, cwd) => {
+          commands.push(args.slice(1).join(" "));
+          return production(args, cwd);
+        },
+      },
+    );
+
+    expect(report.classification).toBe("conflict");
+    expect(report.repository).toEqual({
+      state: "ineligible",
+      reason: "bare",
+      bare: true,
+      gitDirectory: await realpath(bareGit),
+      commonDirectory: await realpath(bareGit),
+      unborn: true,
+      branch: "main",
+      detached: false,
+      remotes: [],
+    });
+    expect(report.repository).not.toHaveProperty("gitFile");
+    expect(report.repository).not.toHaveProperty("topLevel");
+    expect(report.recovery.paths).toContain(canonicalGitLink);
+    expect(report.recovery.remotes).toEqual({ state: "known", remotes: [] });
+    expect(
+      commands.some(
+        (command) =>
+          command === "rev-parse --show-toplevel" ||
+          command.startsWith("status ") ||
+          command.startsWith("ls-tree "),
+      ),
+    ).toBe(false);
+  });
+
+  test.each([
+    ["Git availability", "--version", false],
+    ["absolute Git directory", "rev-parse --absolute-git-dir", false],
+    [
+      "common Git directory",
+      "rev-parse --path-format=absolute --git-common-dir",
+      false,
+    ],
+    ["bare state", "rev-parse --is-bare-repository", false],
+    ["HEAD", "rev-parse --verify --quiet HEAD", false],
+    ["branch", "branch --show-current", true],
+    [
+      "upstream",
+      "for-each-ref --format=%(upstream:short) refs/heads/main",
+      true,
+    ],
+    ["remote names", "remote", true],
+    ["fetch URL", "remote get-url --all origin", true],
+    ["push URL", "remote get-url --push --all origin", true],
+  ] as const)(
+    "keeps symbolic-link bare metadata unavailable after failed %s inspection",
+    async (_name, failed, preservesCommit) => {
+      const fixture = await createCaseHome({ root: strictCaseRoot() });
+      const externalRoot = await temporaryDirectory("casegraph-linked-bare-");
+      const bareGit = path.join(externalRoot, "metadata.git");
+      await mkdir(bareGit);
+      await symlink(bareGit, path.join(fixture.caseHome, ".git"));
+      const canonicalHome = await realpath(fixture.caseHome);
+      const canonicalBareGit = await realpath(bareGit);
+      const commands: string[] = [];
+      const runner: GitRunner = (args) => {
+        const command = args.slice(1).join(" ");
+        commands.push(command);
+        if (command === failed)
+          return Promise.resolve({
+            exitCode: 74,
+            stderr: "injected symbolic-link bare failure\n",
+            stdout: "",
+          });
+        const outputs: Record<string, string> = {
+          "--version": "git version test\n",
+          "rev-parse --absolute-git-dir": `${canonicalBareGit}\n`,
+          "rev-parse --path-format=absolute --git-common-dir": `${canonicalBareGit}\n`,
+          "rev-parse --is-bare-repository": "true\n",
+          "rev-parse --verify --quiet HEAD": `${"b".repeat(40)}\n`,
+          "branch --show-current": "main\n",
+          "for-each-ref --format=%(upstream:short) refs/heads/main": "",
+          remote: "origin\n",
+          "remote get-url --all origin": "origin-fetch\n",
+          "remote get-url --push --all origin": "origin-push\n",
+        };
+        return Promise.resolve({
+          exitCode: 0,
+          stderr: "",
+          stdout: outputs[command] ?? "",
+        });
+      };
+
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder: fixture.caseFolder,
+          caseId: "PoliceConductUS/git-symlink-bare-failure",
+          configHome: fixture.configHome,
+          selectedRemote: "origin",
+        },
+        { git: runner },
+      );
+
+      expect(report.classification).toBe("unavailable");
+      expect(report.repository.state).toBe("unavailable");
+      if (report.repository.state !== "unavailable")
+        throw new Error("expected unavailable linked bare inspection");
+      expect(Object.keys(report.repository).sort()).toEqual([
+        "diagnostic",
+        "state",
+      ]);
+      expect(report.structuralPushTarget).toEqual({
+        state: "unavailable",
+        ready: false,
+        remote: "origin",
+        diagnostic: report.repository.diagnostic,
+        provesWritability: false,
+      });
+      expect(report.recovery.remotes).toEqual({
+        state: "unavailable",
+        diagnostic: report.repository.diagnostic,
+      });
+      if (preservesCommit) expect(report.recovery.commit).toBe("b".repeat(40));
+      else expect(report.recovery).not.toHaveProperty("commit");
+      expect(report.recovery.paths).toContain(path.join(canonicalHome, ".git"));
+      expect(JSON.stringify(report)).not.toContain("git-symlink");
+      expect(JSON.stringify(report)).not.toContain("mismatched-top-level");
+      expect(report.structuralPushTarget).not.toHaveProperty("pushUrls");
+      expect(report.recovery.remotes).not.toHaveProperty("remotes");
+      expect(
+        commands.some(
+          (command) =>
+            command === "rev-parse --show-toplevel" ||
+            command.startsWith("status ") ||
+            command.startsWith("ls-tree "),
+        ),
+      ).toBe(false);
+      expect(commands.at(-1)).toBe(failed);
+    },
+  );
+});
+
 describe("Git runner boundary", () => {
   test("uses git with argument arrays and inspection never asks for a mutation command", async () => {
     const fixture = await createCaseHome({ commit: true });
@@ -1066,6 +1494,139 @@ describe("Git runner boundary", () => {
 
 describe("required Git result classification", () => {
   const success = (stdout = "") => ({ exitCode: 0, stderr: "", stdout });
+
+  test.each([
+    ["Git availability", "--version", false],
+    ["absolute Git directory", "rev-parse --absolute-git-dir", false],
+    [
+      "common Git directory",
+      "rev-parse --path-format=absolute --git-common-dir",
+      false,
+    ],
+    ["bare state", "rev-parse --is-bare-repository", false],
+    ["HEAD", "rev-parse --verify --quiet HEAD", false],
+    ["branch", "branch --show-current", true],
+    [
+      "upstream",
+      "for-each-ref --format=%(upstream:short) refs/heads/main",
+      true,
+    ],
+    ["top level", "rev-parse --show-toplevel", true],
+    ["status", "status --porcelain=v1", true],
+    ["tracked root", "ls-tree --name-only HEAD -- root.yaml", true],
+    ["remote names", "remote", true],
+    ["first fetch URL", "remote get-url --all alpha", true],
+    ["first push URL", "remote get-url --push --all alpha", true],
+    ["later fetch URL", "remote get-url --all beta", true],
+    ["later push URL", "remote get-url --push --all beta", true],
+  ] as const)(
+    "keeps symbolic-link metadata unavailable after failed %s inspection",
+    async (_name, failed, preservesCommit) => {
+      const fixture = await createCaseHome({ root: strictCaseRoot() });
+      const externalRoot = await temporaryDirectory("casegraph-git-link-");
+      const externalGitDirectory = path.join(externalRoot, "metadata.git");
+      await mkdir(externalGitDirectory);
+      await symlink(externalGitDirectory, path.join(fixture.caseHome, ".git"));
+      const canonicalFolder = await realpath(fixture.caseFolder);
+      const canonicalHome = await realpath(fixture.caseHome);
+      const canonicalRoot = path.join(canonicalHome, "root.yaml");
+      const canonicalGitLink = path.join(canonicalHome, ".git");
+      const canonicalExternalGit = await realpath(externalGitDirectory);
+      const commands: string[] = [];
+      const runner: GitRunner = (args) => {
+        const command = args.slice(1).join(" ");
+        commands.push(command);
+        if (command === failed)
+          return Promise.resolve({
+            exitCode: 73,
+            stderr: "injected symbolic-link inspection failure\n",
+            stdout: "",
+          });
+        const outputs: Record<string, string> = {
+          "--version": "git version test\n",
+          "rev-parse --absolute-git-dir": `${canonicalExternalGit}\n`,
+          "rev-parse --path-format=absolute --git-common-dir": `${canonicalExternalGit}\n`,
+          "rev-parse --is-bare-repository": "false\n",
+          "rev-parse --verify --quiet HEAD": `${"a".repeat(40)}\n`,
+          "branch --show-current": "main\n",
+          "for-each-ref --format=%(upstream:short) refs/heads/main": "",
+          "rev-parse --show-toplevel": `${canonicalHome}\n`,
+          "status --porcelain=v1": "",
+          "ls-tree --name-only HEAD -- root.yaml": "root.yaml\n",
+          remote: "alpha\nbeta\n",
+          "remote get-url --all alpha": "alpha-fetch\n",
+          "remote get-url --push --all alpha": "alpha-push\n",
+          "remote get-url --all beta": "beta-fetch\n",
+          "remote get-url --push --all beta": "beta-push\n",
+        };
+        return Promise.resolve(success(outputs[command] ?? ""));
+      };
+
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder: fixture.caseFolder,
+          caseId: "PoliceConductUS/git-symlink-failure",
+          configHome: fixture.configHome,
+          selectedRemote: "beta",
+        },
+        { git: runner },
+      );
+
+      expect(report.classification).toBe("unavailable");
+      expect(report.resource).toEqual({ state: "valid", count: 1 });
+      expect(report.registration).toEqual({ state: "absent" });
+      expect(report.repository.state).toBe("unavailable");
+      if (report.repository.state !== "unavailable")
+        throw new Error("expected unavailable symbolic-link inspection");
+      expect(Object.keys(report.repository).sort()).toEqual([
+        "diagnostic",
+        "state",
+      ]);
+      expect(report.repository.diagnostic).toContain(
+        "injected symbolic-link inspection failure",
+      );
+      expect(report.structuralPushTarget).toEqual({
+        state: "unavailable",
+        ready: false,
+        remote: "beta",
+        diagnostic: report.repository.diagnostic,
+        provesWritability: false,
+      });
+      expect(report.recovery).toEqual({
+        paths: [
+          canonicalFolder,
+          canonicalHome,
+          canonicalRoot,
+          canonicalGitLink,
+        ],
+        resourceCount: 1,
+        ...(preservesCommit ? { commit: "a".repeat(40) } : {}),
+        repositoryDiagnostic: report.repository.diagnostic,
+        remotes: {
+          state: "unavailable",
+          diagnostic: report.repository.diagnostic,
+        },
+        registration: "absent",
+      });
+      expect(report.registrationEligibility.reasons).toContain(
+        failed === "--version"
+          ? "Git is unavailable"
+          : report.repository.diagnostic,
+      );
+      expect(report.mutationReadiness.reasons).toContain(
+        failed === "--version"
+          ? "Git is unavailable"
+          : report.repository.diagnostic,
+      );
+      expect(report.structuralPushTarget).not.toHaveProperty("pushUrls");
+      expect(report.recovery.remotes).not.toHaveProperty("remotes");
+      expect(JSON.stringify(report)).not.toContain("git-symlink");
+      expect(JSON.stringify(report)).not.toContain("mismatched-top-level");
+      expect(JSON.stringify(report)).not.toContain("alpha-fetch");
+      expect(JSON.stringify(report)).not.toContain("alpha-push");
+      expect(commands.at(-1)).toBe(failed);
+    },
+  );
 
   test.each([
     ["absolute git directory", "rev-parse --absolute-git-dir", false],

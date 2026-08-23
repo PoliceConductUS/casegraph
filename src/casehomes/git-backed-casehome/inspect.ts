@@ -62,7 +62,7 @@ export type RepositoryReport =
     }
   | ({
       readonly state: "ineligible";
-      readonly reason: "gitfile" | "mismatched-top-level";
+      readonly reason: "git-symlink" | "gitfile" | "mismatched-top-level";
       readonly bare: false;
       readonly expectedTopLevel: string;
       readonly gitFile?: string;
@@ -260,7 +260,11 @@ async function inspectRepository(
   cwd: string,
   expectedTopLevel: string,
   gitEntry:
-    | { readonly isDirectory: boolean; readonly isFile: boolean }
+    | {
+        readonly isDirectory: boolean;
+        readonly isFile: boolean;
+        readonly isSymbolicLink: boolean;
+      }
     | undefined,
 ): Promise<RepositoryInspection> {
   const absoluteGitDirectoryArgs = ["rev-parse", "--absolute-git-dir"] as const;
@@ -411,6 +415,18 @@ async function inspectRepository(
     remotes: remoteResult.remotes,
   };
 
+  if (gitEntry?.isSymbolicLink === true) {
+    return inspected(
+      {
+        state: "ineligible",
+        reason: "git-symlink",
+        expectedTopLevel,
+        bare: false,
+        ...details,
+      },
+      commit,
+    );
+  }
   if (gitEntry?.isFile === true) {
     return inspected(
       {
@@ -525,14 +541,21 @@ async function canonicalCaseFolder(caseFolder: string): Promise<string> {
   }
 }
 
-async function gitEntryAt(
-  caseHome: string,
-): Promise<
-  { readonly isDirectory: boolean; readonly isFile: boolean } | undefined
+async function gitEntryAt(caseHome: string): Promise<
+  | {
+      readonly isDirectory: boolean;
+      readonly isFile: boolean;
+      readonly isSymbolicLink: boolean;
+    }
+  | undefined
 > {
   try {
     const entry = await lstat(path.join(caseHome, ".git"));
-    return { isDirectory: entry.isDirectory(), isFile: entry.isFile() };
+    return {
+      isDirectory: entry.isDirectory(),
+      isFile: entry.isFile(),
+      isSymbolicLink: entry.isSymbolicLink(),
+    };
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
     throw error;
@@ -798,7 +821,10 @@ export async function inspectGitBackedCaseHome(
     registrationReasons.push(
       repository.state === "ineligible" && repository.reason === "bare"
         ? `Exact CaseHome repository at ${canonicalHome} is bare`
-        : "repository is not an exact primary checkout",
+        : repository.state === "ineligible" &&
+            repository.reason === "git-symlink"
+          ? `Exact CaseHome uses an ineligible symbolic-link .git entry at ${path.join(canonicalHome, ".git")}`
+          : "repository is not an exact primary checkout",
     );
   } else {
     if (resource.state !== "valid")
@@ -823,7 +849,10 @@ export async function inspectGitBackedCaseHome(
     mutationReasons.push(
       repository.state === "ineligible" && repository.reason === "bare"
         ? `Exact CaseHome repository at ${canonicalHome} is bare`
-        : "repository is not an exact primary checkout",
+        : repository.state === "ineligible" &&
+            repository.reason === "git-symlink"
+          ? `Exact CaseHome uses an ineligible symbolic-link .git entry at ${path.join(canonicalHome, ".git")}`
+          : "repository is not an exact primary checkout",
     );
   } else {
     if (resource.state !== "valid")
@@ -843,9 +872,11 @@ export async function inspectGitBackedCaseHome(
     diagnostics.push(
       repository.reason === "bare"
         ? `Exact CaseHome repository at ${canonicalHome} is bare`
-        : repository.gitFile !== undefined
-          ? `Exact CaseHome uses an ineligible gitfile at ${repository.gitFile}`
-          : `Git top-level ${String(repository.topLevel)} does not equal exact CaseHome ${canonicalHome}`,
+        : repository.reason === "git-symlink"
+          ? `Exact CaseHome uses an ineligible symbolic-link .git entry at ${path.join(canonicalHome, ".git")}`
+          : repository.gitFile !== undefined
+            ? `Exact CaseHome uses an ineligible gitfile at ${repository.gitFile}`
+            : `Git top-level ${String(repository.topLevel)} does not equal exact CaseHome ${canonicalHome}`,
     );
   }
 
