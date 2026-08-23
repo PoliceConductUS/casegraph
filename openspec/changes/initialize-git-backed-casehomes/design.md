@@ -177,13 +177,16 @@ the exact known remote inventory.
 The non-bare ineligible union adds reason `git-symlink` without a new public
 field only after all required Git and remote queries succeed. Git unavailable,
 command failure, or atomic remote-enumeration failure takes precedence and
-produces unavailable state without partial repository/remote facts. A
-successfully inspected bare target takes precedence and produces the dedicated
-bare variant. The successful non-bare `git-symlink` report retains the observed
-worktree repository details, including canonical `topLevel`, `gitDirectory`,
-and `commonDirectory`; `topLevel` may equal `expectedTopLevel`, and it omits the
-regular-file-only `gitFile` property. Its diagnostic and both readiness reason
-arrays use exact text
+produces an unavailable `RepositoryReport`, structural push target, and
+recovery remote discriminant without partial repository fields, `pushUrls`, or
+remote arrays. It still preserves safely observed `recovery.paths`, resource
+count, registration state, and commit when HEAD succeeded before the later
+failure. A successfully inspected bare target takes precedence and produces
+the dedicated bare variant. The successful non-bare `git-symlink` report
+retains the observed worktree repository details, including canonical
+`topLevel`, `gitDirectory`, and `commonDirectory`; `topLevel` may equal
+`expectedTopLevel`, and it omits the regular-file-only `gitFile` property. Its
+diagnostic and both readiness reason arrays use exact text
 `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`.
 Recovery contains the observed
 `.git` link pathname, commit when present, and known complete remotes when those

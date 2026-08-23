@@ -421,21 +421,36 @@ YAML, Zod, Vitest, OpenSpec.
   successful non-bare inspection.
 
   Add a table for symbolic-link metadata precedence. Real dangling and non-Git
-  targets, missing Git, an injected required repository command failure, and an
-  injected later remote URL failure must each produce unavailable
-  repository/classification/structural/recovery state with the same diagnostic,
-  no `git-symlink`, `mismatched-top-level`, bare variant, or partial
-  repository/remote facts, and no absent/non-Git result from the allowed
-  no-repository tuple because the exact `.git` entry exists. The remote row must
-  prove atomic discard after earlier remote facts were observed. A real
+  targets and missing Git must produce unavailable state, and no absent/non-Git
+  result from the allowed no-repository tuple because the exact `.git` entry
+  exists. Then rerun the existing injected-runner failure table with the
+  symbolic-link precondition for every required command: the Git availability
+  probe, absolute Git directory, common directory, bare-state, HEAD, branch,
+  upstream, non-bare top-level, status, committed-root `ls-tree`, remote-name
+  enumeration, and the first and later remote's fetch-URL and push-URL queries.
+  Every row must produce exact
+  unavailable repository/classification/structural/recovery discriminants with
+  the same diagnostic and no `git-symlink`, `mismatched-top-level`, bare variant,
+  partial `RepositoryReport` field, `pushUrls`, or remote array. Each row must
+  stop before later commands while preserving safely observed recovery paths,
+  resource count, registration state, and commit iff HEAD succeeded before the
+  injected failure.
+
+  For the symlink plus later-remote rows, assert the exact bounded outcome:
+  repository is only `{ state: "unavailable", diagnostic }`; structural push
+  target and recovery remotes are unavailable with no arrays; recovery retains
+  canonical CaseFolder/CaseHome, every safely observed present authoritative
+  resource/config/lock path, the observed `.git` link pathname, resource count,
+  registration state, and the earlier commit; `repositoryDiagnostic` equals the
+  remote failure; and no partial remote or skipped-query fact appears. A real
   symbolic link to bare Git metadata with successful commands must produce only
-  the dedicated bare variant/reason, omit every worktree-only property, skip
-  `show-toplevel`, `status`, and `ls-tree`, and retain truthful known
-  structural/recovery remote facts. Inject a remote failure into that fixture
-  and require unavailable/atomic state rather than either ineligible reason.
-  Every row proves link, target, metadata, worktree, and registration
-  immutability and that no reason overrides an earlier unavailable or bare
-  decision.
+  the dedicated bare
+  variant/reason, omit every worktree-only property, skip `show-toplevel`,
+  `status`, and `ls-tree`, and retain truthful known structural/recovery remote
+  facts. Inject every applicable bare command and remote failure and require
+  unavailable/atomic state rather than either ineligible reason. Every row
+  proves link, target, metadata, worktree, and registration immutability and that
+  no reason overrides an earlier unavailable or bare decision.
 
   In `git.test.ts`, exercise `createGitRunner()` without a public environment
   seam. Build distinguishable repositories A and B, then run A with ambient
@@ -529,11 +544,12 @@ YAML, Zod, Vitest, OpenSpec.
   entry observation. Do not classify the observed link until every required Git
   and remote query succeeds. A missing tool, dangling/non-Git target, or any
   required command/remote failure returns the existing unavailable report and
-  publishes no partial facts. If successful inspection establishes bare
-  metadata, return only the dedicated bare variant. Otherwise, after successful
-  non-bare inspection and before genuine top-level mismatch classification,
-  return the existing non-bare ineligible shape with reason `"git-symlink"` for
-  that entry. Keep observed
+  publishes no partial `RepositoryReport`, `pushUrls`, or remote array while
+  retaining safely observed recovery paths, resource count, registration state,
+  and commit. If successful inspection establishes bare metadata, return only
+  the dedicated bare variant. Otherwise, after successful non-bare inspection
+  and before genuine top-level mismatch classification, return the existing
+  non-bare ineligible shape with reason `"git-symlink"` for that entry. Keep observed
   `expectedTopLevel`, `topLevel`, `gitDirectory`, `commonDirectory`, commit,
   branch, upstream, and complete remote facts unchanged. Produce one
   exact diagnostic/readiness reason,
@@ -613,8 +629,13 @@ YAML, Zod, Vitest, OpenSpec.
   `"mismatched-top-level"`; require only the real-fixture reason, diagnostic,
   readiness, recovery, and equal-path no-mismatch witnesses to fail while
   regular gitfile and genuine mismatch cases stay green. Then temporarily force
-  `"git-symlink"` after an injected required-command or later-remote failure and
-  require only the unavailable/no-partial-facts rows to fail; force it after a
+  `"git-symlink"` immediately after the symlink `lstat`, before any Git command,
+  and require every symbolic-link-precondition command/remote failure row to
+  fail its unavailable, command-stop, exact `RepositoryReport`, remote-array,
+  and bounded-recovery assertions. Separately publish earlier Git details or a
+  partial remote array after a later remote failure and require only the exact
+  property-absence/atomic rows to fail while safe recovery path, resource,
+  registration, and commit assertions stay green. Force `"git-symlink"` after a
   real linked-bare inspection and require only the bare shape, forbidden-command,
   and field-absence rows to fail. Restore after each mutation. Temporarily
   call the strict

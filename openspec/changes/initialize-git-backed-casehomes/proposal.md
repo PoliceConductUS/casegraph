@@ -28,7 +28,9 @@ registration rules.
   symbolic link with the dedicated `git-symlink` ineligible reason and truthful
   Git paths, never as a top-level mismatch. Git/tool/command failure remains
   unavailable, and a symbolic link resolving to bare metadata remains the
-  dedicated bare variant.
+  dedicated bare variant. Failure discards the incomplete `RepositoryReport`
+  and every partial remote array while preserving only path, resource,
+  registration, and recovery-commit facts safely observed before the failure.
 - Expose the canonical authoritative document paths already opened by the
   strict rooted-resource snapshot and use them in recovery reporting without a
   second read or directory scan.

@@ -34,8 +34,9 @@
       equal/differing-top-level diagnostic/recovery state, unavailable
       precedence for Git/command/remote failures, bare precedence for linked
       bare metadata, real dangling/non-Git/linked-bare fixtures, injected
-      command/remote failure rows, reason-specific precedence mutations, and
-      raw byte/ref immutability.
+      symlink-precondition failure rows for every required Git and remote query,
+      exact bounded-recovery assertions, reason-specific precedence mutations,
+      and raw byte/ref immutability.
 - [ ] 2.2 Implement the smallest snapshot and exact read-only inspection
       corrections through injectable Git and registration boundaries, then make
       the focused tests pass without entering Task 3.

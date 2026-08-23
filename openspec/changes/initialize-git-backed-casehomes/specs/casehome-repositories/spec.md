@@ -118,14 +118,17 @@ symbolic link only after every required Git and remote inspection succeeds and
 establishes a non-bare repository. Git unavailability, a dangling or non-Git
 symbolic-link target, and any required Git or remote command failure MUST
 produce the existing unavailable states and MUST NOT publish `"git-symlink"`,
-`"mismatched-top-level"`, or partial repository/remote facts. Successful
-inspection that establishes bare metadata MUST produce the dedicated bare
-variant and reason, not `"git-symlink"`. After successful non-bare inspection,
-`"git-symlink"` MUST take precedence over `"mismatched-top-level"`; the report
-MUST preserve the observed canonical `topLevel`, `gitDirectory`, and
-`commonDirectory`, and MUST NOT add a new public field. Because the entry is not
-a regular gitfile, the `"git-symlink"` variant MUST omit `gitFile`. Its exact
-diagnostic and readiness reason MUST be
+`"mismatched-top-level"`, a partial `RepositoryReport`, `pushUrls`, or a remote
+array. That unavailable result MUST preserve safely observed earlier
+`recovery.paths`, resource count, registration state, and commit when HEAD
+succeeded before the failure; it MUST NOT expose a Git fact from the failed or
+later command. Successful inspection that establishes bare metadata MUST
+produce the dedicated bare variant and reason, not `"git-symlink"`. After
+successful non-bare inspection, `"git-symlink"` MUST take precedence over
+`"mismatched-top-level"`; the report MUST preserve the observed canonical
+`topLevel`, `gitDirectory`, and `commonDirectory`, and MUST NOT add a new public
+field. Because the entry is not a regular gitfile, the `"git-symlink"` variant
+MUST omit `gitFile`. Its exact diagnostic and readiness reason MUST be
 `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`,
 where `<case-home>` is the canonical exact CaseHome path.
 
@@ -452,12 +455,42 @@ control. It MUST NOT expose a public environment or test seam.
 - **THEN** `classification`, `repository`, `structuralPushTarget`, and
   `recovery.remotes` use their existing unavailable states with the failure
   diagnostic
-- **THEN** the report does not publish `"git-symlink"`,
-  `"mismatched-top-level"`, a bare variant, or any partial repository or remote
-  facts
+- **THEN** `repository` is exactly
+  `RepositoryReport { state: "unavailable", diagnostic }` and does not publish
+  `"git-symlink"`, `"mismatched-top-level"`, a bare variant, or earlier
+  repository-detail fields
+- **THEN** `structuralPushTarget` is the unavailable variant with the selected
+  remote only when supplied, the same diagnostic, `ready: false`,
+  `provesWritability: false`, and no `pushUrls`
+- **THEN** `recovery.repositoryDiagnostic` equals that diagnostic and
+  `recovery.remotes` is the unavailable variant with no remote array
+- **THEN** recovery preserves safely observed canonical paths, resource count,
+  registration state, and commit iff HEAD succeeded before the failure, while
+  omitting every Git fact from the failed or later command
 - **THEN** the allowed no-repository tuple is not used because the exact `.git`
   directory entry exists
 - **THEN** inspection and every later boundary perform no mutation
+
+#### Scenario: Symbolic-link metadata later remote failure has exact recovery
+
+- **WHEN** the exact normal CaseHome has symbolic-link non-bare Git metadata
+- **AND** HEAD and every required pre-remote Git command succeed for a committed
+  repository
+- **AND** a remote-name, fetch-URL, or push-URL query fails after zero or more
+  remote values were observed
+- **THEN** `classification` is `"unavailable"` and `repository` is exactly
+  `{ state: "unavailable", diagnostic }` with no earlier repository-detail
+  fields or ineligible reason
+- **THEN** `structuralPushTarget` and `recovery.remotes` are unavailable with
+  that same diagnostic and contain neither `pushUrls` nor a remote array
+- **THEN** recovery preserves the canonical CaseFolder and CaseHome, every
+  safely observed present authoritative resource/config/lock path, the observed
+  `.git` link pathname, the strict resource count and registration state when
+  inspected, and the already-proven commit
+- **THEN** recovery includes `repositoryDiagnostic` equal to the remote-failure
+  diagnostic and contains no partial remote value or fact from a skipped query
+- **THEN** no `git-symlink`, `mismatched-top-level`, bare, no-remote, or empty-URL
+  result overrides the failure
 
 #### Scenario: Symbolic-link Git metadata resolving to bare stays bare
 
@@ -472,7 +505,8 @@ control. It MUST NOT expose a public environment or test seam.
   facts
 - **THEN** any required command or remote failure instead makes repository,
   structural push target, and recovery remotes unavailable without partial
-  facts
+  repository fields, `pushUrls`, or remote arrays while retaining only safely
+  observed earlier recovery facts
 - **THEN** inspection and every later boundary perform no mutation
 
 #### Scenario: Missing Git fails before mutation
