@@ -5,4 +5,12 @@ export {
   type InspectGitBackedCaseHomeDependencies,
   type InspectGitBackedCaseHomeInput,
 } from "./inspect.js";
+export {
+  prepareGitBackedCaseHome,
+  type PreparationCaseResource,
+  type PreparationFailureStep,
+  type PreparedCaseHomeReport,
+  type PrepareGitBackedCaseHomeDependencies,
+  type PrepareGitBackedCaseHomeInput,
+} from "./prepare.js";
 export { CaseHomeRegistrationStore } from "./registration.js";

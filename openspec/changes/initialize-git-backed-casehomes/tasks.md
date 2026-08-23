@@ -43,7 +43,7 @@
 
 ## 3. Local CaseHome Preparation
 
-- [ ] 3.1 Add focused failing tests for missing and nonempty CaseFolders, empty
+- [x] 3.1 Add focused failing tests for missing and nonempty CaseFolders, empty
       CaseHome children, explicitly approved and declined existing non-Git
       CaseHomes with complete rooted graphs, rejection of nonempty new
       membership, inherited outer-owned-state and pre-existing-status
@@ -51,7 +51,7 @@
       outer-ignore suppression, adoption of already-present child content, Git
       availability before paths, init/write/reopen failures, malformed
       portable-config and lock preservation, and no commit/remote/registration.
-- [ ] 3.2 Implement exact-child Git initialization and strict root writing or
+- [x] 3.2 Implement exact-child Git initialization and strict root writing or
       adoption, then make the focused preparation tests pass.
 
 ## 4. Push-Backed Finalization And Existing Registration
