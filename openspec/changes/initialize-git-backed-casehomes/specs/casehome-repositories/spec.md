@@ -114,11 +114,18 @@ other worktree-only field.
 
 The non-bare ineligible `RepositoryReport` reason union MUST include
 `"git-symlink"` for an exact normal CaseHome whose `.git` directory entry is a
-symbolic link. This reason MUST take precedence over
-`"mismatched-top-level"`; the report MUST preserve the observed canonical
-`topLevel`, `gitDirectory`, and `commonDirectory`, and MUST NOT add a new public
-field. Because the entry is not a regular gitfile, the `"git-symlink"` variant
-MUST omit `gitFile`. Its exact diagnostic and readiness reason MUST be
+symbolic link only after every required Git and remote inspection succeeds and
+establishes a non-bare repository. Git unavailability, a dangling or non-Git
+symbolic-link target, and any required Git or remote command failure MUST
+produce the existing unavailable states and MUST NOT publish `"git-symlink"`,
+`"mismatched-top-level"`, or partial repository/remote facts. Successful
+inspection that establishes bare metadata MUST produce the dedicated bare
+variant and reason, not `"git-symlink"`. After successful non-bare inspection,
+`"git-symlink"` MUST take precedence over `"mismatched-top-level"`; the report
+MUST preserve the observed canonical `topLevel`, `gitDirectory`, and
+`commonDirectory`, and MUST NOT add a new public field. Because the entry is not
+a regular gitfile, the `"git-symlink"` variant MUST omit `gitFile`. Its exact
+diagnostic and readiness reason MUST be
 `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`,
 where `<case-home>` is the canonical exact CaseHome path.
 
@@ -403,8 +410,8 @@ control. It MUST NOT expose a public environment or test seam.
 - **WHEN** the exact `casegraph/` child is a normal directory
 - **AND** its `.git` directory entry is a symbolic link to an external Git
   directory
-- **AND** Git inspection succeeds and reports the exact CaseHome as its
-  top-level
+- **AND** every required Git and remote inspection succeeds, establishes a
+  non-bare repository, and reports the exact CaseHome as its top-level
 - **THEN** `classification` is `"conflict"`
 - **THEN** `repository` is non-bare and ineligible with reason `"git-symlink"`
 - **THEN** `repository` does not contain `gitFile`
@@ -429,13 +436,44 @@ control. It MUST NOT expose a public environment or test seam.
 #### Scenario: Symbolic-link Git metadata reason dominates a real mismatch
 
 - **WHEN** the exact normal CaseHome has a symbolic-link `.git` entry
-- **AND** successful Git inspection reports a top-level different from the exact
-  CaseHome
+- **AND** every required Git and remote inspection succeeds, establishes a
+  non-bare repository, and reports a top-level different from the exact CaseHome
 - **THEN** the report preserves both truthful paths but uses reason
   `"git-symlink"`, not `"mismatched-top-level"`
 - **THEN** diagnostics, readiness, and recovery identify the symbolic-link
   metadata state without presenting the top-level difference as the
   ineligibility reason
+
+#### Scenario: Symbolic-link Git metadata failure remains unavailable
+
+- **WHEN** the exact normal CaseHome has a symbolic-link `.git` entry
+- **AND** its target is dangling or not Git metadata, Git is unavailable, or
+  any required Git or remote command fails
+- **THEN** `classification`, `repository`, `structuralPushTarget`, and
+  `recovery.remotes` use their existing unavailable states with the failure
+  diagnostic
+- **THEN** the report does not publish `"git-symlink"`,
+  `"mismatched-top-level"`, a bare variant, or any partial repository or remote
+  facts
+- **THEN** the allowed no-repository tuple is not used because the exact `.git`
+  directory entry exists
+- **THEN** inspection and every later boundary perform no mutation
+
+#### Scenario: Symbolic-link Git metadata resolving to bare stays bare
+
+- **WHEN** the exact normal CaseHome has a symbolic-link `.git` entry resolving
+  to bare Git metadata
+- **AND** every required Git and remote inspection succeeds
+- **THEN** `repository` is the dedicated ineligible bare variant with reason
+  `"bare"`, not `"git-symlink"` or `"mismatched-top-level"`
+- **THEN** no worktree-only command runs and no worktree-only field is present
+- **THEN** structural push target and recovery remotes use their truthful known
+  variants, and recovery reports only applicable exact commit and metadata
+  facts
+- **THEN** any required command or remote failure instead makes repository,
+  structural push target, and recovery remotes unavailable without partial
+  facts
+- **THEN** inspection and every later boundary perform no mutation
 
 #### Scenario: Missing Git fails before mutation
 

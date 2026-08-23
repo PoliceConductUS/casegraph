@@ -58,12 +58,17 @@ CaseFolder or an ancestor is reported as non-primary, but does not block
 initializing an otherwise missing, empty, or explicitly approved exact child as
 a distinct repository. A bare repository cannot be primary. Any `.git` file is
 also ineligible, whether it identifies a linked worktree, a separate-git-dir
-checkout, or a submodule. A symbolic-link `.git` entry is separately ineligible
-with reason `git-symlink`; Git's observed top-level, Git directory, and common
-directory remain truthful even when the observed top-level equals the exact
-CaseHome. That state never claims a top-level mismatch. Preparation preserves every pre-existing outer-owned
-byte, Git index/ref/branch/remote/upstream value, and status entry. The only
-permitted outer status delta, if Git reports one, is Git's natural
+checkout, or a submodule. Only after every required Git and remote inspection
+succeeds and establishes a non-bare repository is a symbolic-link `.git` entry
+separately ineligible with reason `git-symlink`; Git's observed top-level, Git
+directory, and common directory remain truthful even when the observed
+top-level equals the exact CaseHome. That successful non-bare state never
+claims a top-level mismatch. A missing Git executable, a dangling or non-Git
+metadata target, or any required command/remote failure remains unavailable;
+successful inspection of a symbolic link resolving to bare metadata produces
+the dedicated bare variant. Preparation preserves every pre-existing
+outer-owned byte, Git index/ref/branch/remote/upstream value, and status entry.
+The only permitted outer status delta, if Git reports one, is Git's natural
 representation of the nested CaseHome child. Outer ignore rules may suppress
 that representation, and adoption may begin with child content already
 represented in outer status, so preparation does not require a new status
@@ -170,14 +175,20 @@ state unavailable. Recovery includes the exact commit only when committed and
 the exact known remote inventory.
 
 The non-bare ineligible union adds reason `git-symlink` without a new public
-field. It retains the observed worktree repository details, including canonical
-`topLevel`, `gitDirectory`, and `commonDirectory`; `topLevel` may equal
-`expectedTopLevel`, and it omits the regular-file-only `gitFile` property. Its
-diagnostic and both readiness reason arrays use exact text
+field only after all required Git and remote queries succeed. Git unavailable,
+command failure, or atomic remote-enumeration failure takes precedence and
+produces unavailable state without partial repository/remote facts. A
+successfully inspected bare target takes precedence and produces the dedicated
+bare variant. The successful non-bare `git-symlink` report retains the observed
+worktree repository details, including canonical `topLevel`, `gitDirectory`,
+and `commonDirectory`; `topLevel` may equal `expectedTopLevel`, and it omits the
+regular-file-only `gitFile` property. Its diagnostic and both readiness reason
+arrays use exact text
 `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`.
 Recovery contains the observed
 `.git` link pathname, commit when present, and known complete remotes when those
-queries succeed, and never describes the state as `mismatched-top-level`.
+queries succeed, and never describes that successfully inspected non-bare state
+as `mismatched-top-level`, including when the truthful top-level differs.
 Inspection remains read-only and the symlink is never accepted or used for
 repository mutation.
 

@@ -30,8 +30,12 @@
       failures without later false facts, case-insensitively sanitized ambient
       Git selectors/configuration with real PATH preservation, a dedicated bare
       ineligible report with no worktree commands or fields, an exact
-      `git-symlink` reason and truthful equal-top-level diagnostic/recovery
-      state, and raw byte/ref immutability.
+      `git-symlink` reason only after successful non-bare inspection, truthful
+      equal/differing-top-level diagnostic/recovery state, unavailable
+      precedence for Git/command/remote failures, bare precedence for linked
+      bare metadata, real dangling/non-Git/linked-bare fixtures, injected
+      command/remote failure rows, reason-specific precedence mutations, and
+      raw byte/ref immutability.
 - [ ] 2.2 Implement the smallest snapshot and exact read-only inspection
       corrections through injectable Git and registration boundaries, then make
       the focused tests pass without entering Task 3.
