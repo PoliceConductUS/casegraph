@@ -15,7 +15,7 @@
 
 ## 2. Read-Only Primary Repository Inspection
 
-- [x] 2.1 Add focused failing tests for exact CaseFolder/CaseHome derivation,
+- [ ] 2.1 Add focused failing tests for exact CaseFolder/CaseHome derivation,
       strict rooted resource loading, Git root/common-dir/branch/state/remotes,
       registration and recovery reports, symlinks, inherited non-primary roots,
       bare repos, every `.git`-file checkout, CLI/import boundaries, immutable
@@ -29,9 +29,10 @@
       remote states with atomic remote enumeration, command-specific unavailable
       failures without later false facts, case-insensitively sanitized ambient
       Git selectors/configuration with real PATH preservation, a dedicated bare
-      ineligible report with no worktree commands or fields, and raw byte/ref
-      immutability.
-- [x] 2.2 Implement the smallest snapshot and exact read-only inspection
+      ineligible report with no worktree commands or fields, an exact
+      `git-symlink` reason and truthful equal-top-level diagnostic/recovery
+      state, and raw byte/ref immutability.
+- [ ] 2.2 Implement the smallest snapshot and exact read-only inspection
       corrections through injectable Git and registration boundaries, then make
       the focused tests pass without entering Task 3.
 

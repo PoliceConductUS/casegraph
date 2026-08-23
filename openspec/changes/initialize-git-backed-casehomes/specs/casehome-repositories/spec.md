@@ -112,6 +112,16 @@ This variant MUST contain only repository-applicable facts and MUST NOT contain
 `topLevel`, `dirty`, `rootTrackedInHead`, `expectedTopLevel`, `gitFile`, or any
 other worktree-only field.
 
+The non-bare ineligible `RepositoryReport` reason union MUST include
+`"git-symlink"` for an exact normal CaseHome whose `.git` directory entry is a
+symbolic link. This reason MUST take precedence over
+`"mismatched-top-level"`; the report MUST preserve the observed canonical
+`topLevel`, `gitDirectory`, and `commonDirectory`, and MUST NOT add a new public
+field. Because the entry is not a regular gitfile, the `"git-symlink"` variant
+MUST omit `gitFile`. Its exact diagnostic and readiness reason MUST be
+`Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`,
+where `<case-home>` is the canonical exact CaseHome path.
+
 `structuralPushTarget` MUST be exactly one of:
 
 - `{ state: "known"; ready: boolean; remote?: string; pushUrls: readonly string[]; provesWritability: false }`;
@@ -387,6 +397,45 @@ control. It MUST NOT expose a public environment or test seam.
   directory
 - **THEN** inspection, registration, and preparation reject it as the primary
   CaseHome
+
+#### Scenario: Symbolic-link Git metadata has an exact ineligible reason
+
+- **WHEN** the exact `casegraph/` child is a normal directory
+- **AND** its `.git` directory entry is a symbolic link to an external Git
+  directory
+- **AND** Git inspection succeeds and reports the exact CaseHome as its
+  top-level
+- **THEN** `classification` is `"conflict"`
+- **THEN** `repository` is non-bare and ineligible with reason `"git-symlink"`
+- **THEN** `repository` does not contain `gitFile`
+- **THEN** `repository.expectedTopLevel` and `repository.topLevel` both equal the
+  canonical exact CaseHome
+- **THEN** `repository.gitDirectory` and `repository.commonDirectory` truthfully
+  report their canonical observed external paths
+- **THEN** `diagnostics`, `registrationEligibility.reasons`, and
+  `mutationReadiness.reasons` contain
+  `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`
+- **THEN** none of those fields, the repository reason, or recovery claims a
+  mismatched top-level
+- **THEN** successful remote inspection leaves `structuralPushTarget` and
+  `recovery.remotes` in their truthful known variants
+- **THEN** recovery includes the observed `.git` symbolic-link pathname, the
+  commit when present, and the complete known remote inventory
+- **THEN** inspection does not change the link, its target, CaseHome files, Git
+  index, commits, refs, branches, remotes, upstreams, or registration
+- **THEN** preparation, finalization, and existing-repository registration do
+  not accept or mutate through the symbolic-link `.git` entry
+
+#### Scenario: Symbolic-link Git metadata reason dominates a real mismatch
+
+- **WHEN** the exact normal CaseHome has a symbolic-link `.git` entry
+- **AND** successful Git inspection reports a top-level different from the exact
+  CaseHome
+- **THEN** the report preserves both truthful paths but uses reason
+  `"git-symlink"`, not `"mismatched-top-level"`
+- **THEN** diagnostics, readiness, and recovery identify the symbolic-link
+  metadata state without presenting the top-level difference as the
+  ineligibility reason
 
 #### Scenario: Missing Git fails before mutation
 

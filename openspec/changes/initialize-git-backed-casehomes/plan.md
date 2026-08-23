@@ -219,6 +219,10 @@ YAML, Zod, Vitest, OpenSpec.
   it does not intersect worktree details and therefore has no `topLevel`,
   `dirty`, `rootTrackedInHead`, `expectedTopLevel`, `gitFile`, or other
   worktree-only field.
+- Modifies: the existing non-bare ineligible `RepositoryReport` reason union to
+  include `"git-symlink"`. It adds no public field and retains truthful
+  `expectedTopLevel`, observed `topLevel`, `gitDirectory`, and `commonDirectory`;
+  its runtime object omits regular-file-only `gitFile`.
 - Modifies: `RegistrationReport` with exact
   `{ state: "not-inspected"; diagnostic: string }` used only when rejected child
   identity makes strict registry validation unsafe.
@@ -251,6 +255,10 @@ YAML, Zod, Vitest, OpenSpec.
   with different roots, indexes, object/ref/common state, dirty/tracked-root
   state, and remotes, plus hostile global/system configuration that points from
   A toward B.
+  Add a normal committed CaseHome fixture whose `.git` directory is moved to an
+  external temporary path and replaced with a symbolic link. Snapshot the link,
+  external metadata bytes, worktree bytes, index, refs, branch, remotes,
+  upstream, and registration.
 
 - [ ] **Step 2: Write failing report and immutability tests**
 
@@ -297,7 +305,8 @@ YAML, Zod, Vitest, OpenSpec.
 - [ ] **Step 3: Write failing conflict tests**
 
   Cover a non-directory child, symlinked `casegraph`, existing mismatched
-  top-level, committed and unborn bare repositories, and three separate
+  top-level, symbolic-link `.git` metadata, committed and unborn bare
+  repositories, and three separate
   `.git`-file fixtures: linked
   worktree, `--separate-git-dir`, and submodule. Cover missing Git executable,
   missing or invalid strict root, and rooted resource-storage failure. Assert
@@ -388,6 +397,22 @@ YAML, Zod, Vitest, OpenSpec.
   structural push target, and recovery remotes unavailable with the same
   diagnostic, and exposes no empty array as failed/skipped state.
 
+  With the real external-`.git` symlink fixture, assert classification is
+  `"conflict"`, repository state is non-bare and ineligible, reason is exactly
+  `"git-symlink"`, and `gitFile` is absent.
+  Assert canonical `expectedTopLevel` and observed `topLevel` both equal the
+  CaseHome while `gitDirectory` and `commonDirectory` truthfully identify the
+  external metadata paths. Require exact diagnostic and readiness text
+  `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`,
+  and prove none contains
+  `mismatched-top-level`, `does not equal`, or equal-path inequality text.
+  Assert structural push and recovery remotes remain known after successful
+  queries; recovery contains the `.git` link pathname, commit, and complete
+  remotes. Snapshot comparison must prove the link, target, worktree, index,
+  refs, branch, remotes, upstream, and registration unchanged. Add a second
+  injected row with a differing observed top-level to prove the
+  `git-symlink` reason still takes precedence without a new public field.
+
   In `git.test.ts`, exercise `createGitRunner()` without a public environment
   seam. Build distinguishable repositories A and B, then run A with ambient
   `GIT_DIR=B`, `GIT_WORK_TREE=A`, `GIT_INDEX_FILE=B`, `GIT_COMMON_DIR`,
@@ -422,7 +447,8 @@ YAML, Zod, Vitest, OpenSpec.
   not exact, structural/recovery remote failure states still use empty arrays,
   remote enumeration exposes partial results, symlink/non-directory rejection
   still invokes strict registration, the bare variant computes worktree-only
-  fields and commands, and the default runner inherits ambient Git
+  fields and commands, `.git` symlinks are mislabeled as mismatched top-level,
+  and the default runner inherits ambient Git
   selectors/configuration including mixed-case keys. The original
   missing-boundary and recovery REDs remain historical evidence only in
   `task-2-report.md`.
@@ -474,6 +500,19 @@ YAML, Zod, Vitest, OpenSpec.
   recovery remotes known from the complete remote inventory while setting
   registration eligibility and mutation readiness false for the bare reason.
   Copy the commit into recovery only when committed; omit it when unborn.
+
+  Preserve `isSymbolicLink()` from the exact `.git` `lstat` in the internal Git
+  entry observation. After successful non-bare inspection and before genuine
+  top-level mismatch classification, return the existing non-bare ineligible
+  shape with reason `"git-symlink"` for that entry. Keep observed
+  `expectedTopLevel`, `topLevel`, `gitDirectory`, `commonDirectory`, commit,
+  branch, upstream, and complete remote facts unchanged. Produce one
+  exact diagnostic/readiness reason,
+  `Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`,
+  in diagnostics plus registration and mutation readiness. Include the observed
+  `.git` link path plus existing commit/remotes in recovery. Do not add a public
+  field or seam, accept the link as primary, set the regular-file-only `gitFile`
+  property, or use the link during any mutation boundary.
 
   Derive the exact child without recursively scanning and reject symlink
   identity before following it. For a non-bare worktree candidate, compare real
@@ -541,7 +580,11 @@ YAML, Zod, Vitest, OpenSpec.
   one worktree-only property to the bare report and require only its
   property-absence witness to fail; then collapse a bare remote failure into the
   ineligible variant and require the unavailable/atomic witness to fail. Restore
-  after each. Temporarily call the strict
+  after each. Temporarily discard `.git` `isSymbolicLink()` state or route it to
+  `"mismatched-top-level"`; require only the real-fixture reason, diagnostic,
+  readiness, recovery, and equal-path no-mismatch witnesses to fail while
+  regular gitfile and genuine mismatch cases stay green. Restore. Temporarily
+  call the strict
   registration reader on a symlink/non-directory exit and require the
   registration-zero-call and target-zero-access witnesses to fail. Finally pass
   ambient `process.env` unchanged and require the A/B, hostile-config,

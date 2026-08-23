@@ -58,7 +58,10 @@ CaseFolder or an ancestor is reported as non-primary, but does not block
 initializing an otherwise missing, empty, or explicitly approved exact child as
 a distinct repository. A bare repository cannot be primary. Any `.git` file is
 also ineligible, whether it identifies a linked worktree, a separate-git-dir
-checkout, or a submodule. Preparation preserves every pre-existing outer-owned
+checkout, or a submodule. A symbolic-link `.git` entry is separately ineligible
+with reason `git-symlink`; Git's observed top-level, Git directory, and common
+directory remain truthful even when the observed top-level equals the exact
+CaseHome. That state never claims a top-level mismatch. Preparation preserves every pre-existing outer-owned
 byte, Git index/ref/branch/remote/upstream value, and status entry. The only
 permitted outer status delta, if Git reports one, is Git's natural
 representation of the nested CaseHome child. Outer ignore rules may suppress
@@ -165,6 +168,18 @@ remote queries give structural push and recovery remote known states, while any
 remote failure atomically makes repository, structural push, and recovery remote
 state unavailable. Recovery includes the exact commit only when committed and
 the exact known remote inventory.
+
+The non-bare ineligible union adds reason `git-symlink` without a new public
+field. It retains the observed worktree repository details, including canonical
+`topLevel`, `gitDirectory`, and `commonDirectory`; `topLevel` may equal
+`expectedTopLevel`, and it omits the regular-file-only `gitFile` property. Its
+diagnostic and both readiness reason arrays use exact text
+`Exact CaseHome uses an ineligible symbolic-link .git entry at <case-home>/.git`.
+Recovery contains the observed
+`.git` link pathname, commit when present, and known complete remotes when those
+queries succeed, and never describes the state as `mismatched-top-level`.
+Inspection remains read-only and the symlink is never accepted or used for
+repository mutation.
 
 Every report includes `classification`, `paths`, `resource`, `repository`,
 `registration`, `structuralPushTarget`, `registrationEligibility`,

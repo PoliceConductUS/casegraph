@@ -23,6 +23,9 @@ registration rules.
   safe normal and Git-unavailable directories.
 - Report bare repositories through a dedicated ineligible shape containing only
   repository-applicable facts, without running or inventing worktree state.
+- Report an exact normal CaseHome whose `.git` entry is a symbolic link with the
+  dedicated `git-symlink` ineligible reason and truthful Git paths, never as a
+  top-level mismatch.
 - Expose the canonical authoritative document paths already opened by the
   strict rooted-resource snapshot and use them in recovery reporting without a
   second read or directory scan.
@@ -84,3 +87,6 @@ registration rules.
   already-opened authoritative document paths for recovery.
 - Adds no public CLI, provider API, dependency, infrastructure, worktree,
   migration, hosting, portable `config.yaml`, alias, or default behavior.
+- This correction does not accept `.git` symlinks as primary, follow one for
+  mutation, redefine regular gitfiles or genuine top-level mismatches, or alter
+  the exact-child symlink zero-target-access boundary.
