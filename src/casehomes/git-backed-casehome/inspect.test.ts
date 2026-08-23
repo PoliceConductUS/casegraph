@@ -139,6 +139,30 @@ async function snapshotDirectoryBytes(
   return files;
 }
 
+async function snapshotDirectoryState(
+  directory: string,
+): Promise<
+  | { readonly state: "absent" }
+  | { readonly entries: Record<string, string>; readonly state: "present" }
+> {
+  try {
+    return {
+      entries: await snapshotDirectoryBytes(directory),
+      state: "present",
+    };
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return { state: "absent" };
+    }
+    throw error;
+  }
+}
+
 async function snapshotRepository(caseHome: string, configHome: string) {
   async function optionalBytes(filePath: string): Promise<string | undefined> {
     try {
@@ -245,7 +269,9 @@ async function snapshotLinkedGitFixture(input: {
     readonly size: number;
     readonly target: string;
   };
-  readonly metadata: Record<string, string>;
+  readonly metadata:
+    | { readonly state: "absent" }
+    | { readonly entries: Record<string, string>; readonly state: "present" };
   readonly registrationEntries: readonly (readonly [string, string])[];
   readonly repository: Awaited<ReturnType<typeof snapshotRepository>>;
 }> {
@@ -262,7 +288,7 @@ async function snapshotLinkedGitFixture(input: {
       size: link.size,
       target: await readlink(input.gitLink),
     },
-    metadata: await snapshotDirectoryBytes(input.metadataDirectory),
+    metadata: await snapshotDirectoryState(input.metadataDirectory),
     registrationEntries: [...registrations.entries()].sort(([left], [right]) =>
       left.localeCompare(right),
     ),
@@ -1201,23 +1227,32 @@ describe("symbolic-link Git metadata", () => {
   });
 
   test("uses the git-symlink reason before a truthful differing top-level", async () => {
-    const fixture = await createCaseHome({ root: strictCaseRoot() });
-    const externalRoot = await temporaryDirectory("casegraph-git-link-");
-    const externalGitDirectory = path.join(externalRoot, "metadata.git");
-    await mkdir(externalGitDirectory);
-    await symlink(externalGitDirectory, path.join(fixture.caseHome, ".git"));
+    const fixture = await createCaseHome({ commit: true });
+    const caseId = "PoliceConductUS/git-symlink-mismatch";
+    await new CaseHomeRegistrationStore().register({
+      configHome: fixture.configHome,
+      caseId,
+      rootPath: fixture.rootPath,
+    });
+    const actualCommit = await git(fixture.caseHome, ["rev-parse", "HEAD"]);
+    const { externalGitDirectory, gitLink } =
+      await moveGitDirectoryBehindSymlink(fixture.caseHome);
     const canonicalHome = await realpath(fixture.caseHome);
-    const otherTopLevel = path.join(await realpath(externalRoot), "other");
+    const canonicalExternalGit = await realpath(externalGitDirectory);
+    const otherTopLevel = path.join(
+      await realpath(path.dirname(externalGitDirectory)),
+      "other",
+    );
     const commands: string[] = [];
     const runner: GitRunner = (args) => {
       const command = args.slice(1).join(" ");
       commands.push(command);
       const outputs: Record<string, string> = {
         "--version": "git version test\n",
-        "rev-parse --absolute-git-dir": `${externalGitDirectory}\n`,
-        "rev-parse --path-format=absolute --git-common-dir": `${externalGitDirectory}\n`,
+        "rev-parse --absolute-git-dir": `${canonicalExternalGit}\n`,
+        "rev-parse --path-format=absolute --git-common-dir": `${canonicalExternalGit}\n`,
         "rev-parse --is-bare-repository": "false\n",
-        "rev-parse --verify --quiet HEAD": `${"a".repeat(40)}\n`,
+        "rev-parse --verify --quiet HEAD": `${actualCommit}\n`,
         "branch --show-current": "main\n",
         "for-each-ref --format=%(upstream:short) refs/heads/main": "",
         "rev-parse --show-toplevel": `${otherTopLevel}\n`,
@@ -1231,11 +1266,17 @@ describe("symbolic-link Git metadata", () => {
         stdout: outputs[command] ?? "",
       });
     };
+    const before = await snapshotLinkedGitFixture({
+      caseHome: fixture.caseHome,
+      configHome: fixture.configHome,
+      gitLink,
+      metadataDirectory: externalGitDirectory,
+    });
 
     const report = await inspectGitBackedCaseHome(
       {
         caseFolder: fixture.caseFolder,
-        caseId: "PoliceConductUS/git-symlink-mismatch",
+        caseId,
         configHome: fixture.configHome,
       },
       { git: runner },
@@ -1247,41 +1288,75 @@ describe("symbolic-link Git metadata", () => {
       reason: "git-symlink",
       expectedTopLevel: canonicalHome,
       topLevel: otherTopLevel,
-      gitDirectory: externalGitDirectory,
-      commonDirectory: externalGitDirectory,
+      gitDirectory: canonicalExternalGit,
+      commonDirectory: canonicalExternalGit,
     });
     expect(report.repository).not.toHaveProperty("gitFile");
     expect(report.diagnostics).toEqual([reason]);
     expect(report.registrationEligibility.reasons).toEqual([reason]);
     expect(report.mutationReadiness.reasons).toEqual([reason]);
     expect(commands.at(-1)).toBe("remote");
+    expect(
+      await snapshotLinkedGitFixture({
+        caseHome: fixture.caseHome,
+        configHome: fixture.configHome,
+        gitLink,
+        metadataDirectory: externalGitDirectory,
+      }),
+    ).toEqual(before);
   });
 
   test.each(["dangling", "non-git"] as const)(
     "keeps a real %s .git symlink unavailable",
     async (targetState) => {
       const fixture = await createCaseHome({ root: strictCaseRoot() });
+      const caseId = `PoliceConductUS/git-symlink-${targetState}`;
+      await writeFile(
+        path.join(fixture.caseHome, "config.yaml"),
+        "ignored config bytes\n",
+      );
+      await writeFile(
+        path.join(fixture.caseHome, "casegraph.lock.yaml"),
+        "ignored lock bytes\n",
+      );
+      await new CaseHomeRegistrationStore().register({
+        configHome: fixture.configHome,
+        caseId,
+        rootPath: fixture.rootPath,
+      });
       const externalRoot = await temporaryDirectory("casegraph-git-link-");
       const target = path.join(externalRoot, "metadata.git");
-      if (targetState === "non-git") await mkdir(target);
+      if (targetState === "non-git") {
+        await mkdir(target);
+        await writeFile(path.join(target, "not-git.txt"), "not Git metadata\n");
+      }
       const gitLink = path.join(fixture.caseHome, ".git");
       await symlink(target, gitLink);
       const canonicalFolder = await realpath(fixture.caseFolder);
       const canonicalHome = await realpath(fixture.caseHome);
       const canonicalRoot = path.join(canonicalHome, "root.yaml");
+      const canonicalConfig = path.join(canonicalHome, "config.yaml");
+      const canonicalLock = path.join(canonicalHome, "casegraph.lock.yaml");
       const canonicalGitLink = path.join(canonicalHome, ".git");
-      const rootBefore = await readFile(fixture.rootPath);
-      const targetBefore =
-        targetState === "non-git" ? await snapshotDirectoryBytes(target) : null;
+      const before = await snapshotLinkedGitFixture({
+        caseHome: fixture.caseHome,
+        configHome: fixture.configHome,
+        gitLink,
+        metadataDirectory: target,
+      });
 
       const report = await inspectGitBackedCaseHome({
         caseFolder: fixture.caseFolder,
-        caseId: `PoliceConductUS/git-symlink-${targetState}`,
+        caseId,
         configHome: fixture.configHome,
         selectedRemote: "origin",
       });
 
       expect(report.classification).toBe("unavailable");
+      expect(report.registration).toEqual({
+        state: "current",
+        registeredRoot: canonicalRoot,
+      });
       expect(report.repository.state).toBe("unavailable");
       if (report.repository.state !== "unavailable")
         throw new Error("expected unavailable repository");
@@ -1305,14 +1380,20 @@ describe("symbolic-link Git metadata", () => {
         canonicalFolder,
         canonicalHome,
         canonicalRoot,
+        canonicalConfig,
+        canonicalLock,
         canonicalGitLink,
       ]);
       expect(JSON.stringify(report)).not.toContain("git-symlink");
       expect(JSON.stringify(report)).not.toContain("mismatched-top-level");
-      expect(await readlink(gitLink)).toBe(target);
-      expect(await readFile(fixture.rootPath)).toEqual(rootBefore);
-      if (targetBefore !== null)
-        expect(await snapshotDirectoryBytes(target)).toEqual(targetBefore);
+      expect(
+        await snapshotLinkedGitFixture({
+          caseHome: fixture.caseHome,
+          configHome: fixture.configHome,
+          gitLink,
+          metadataDirectory: target,
+        }),
+      ).toEqual(before);
     },
   );
 
