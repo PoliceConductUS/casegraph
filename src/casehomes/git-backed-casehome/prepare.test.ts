@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -306,7 +307,268 @@ describe("local Git-backed CaseHome preparation", () => {
         path.join(realCaseHome, MEMBER_UID, "root.yaml"),
         path.join(realCaseHome, "config.yaml"),
         path.join(realCaseHome, "casegraph.lock.yaml"),
+        path.join(realCaseHome, "owned-note.txt"),
       ]),
+    );
+  });
+
+  test.each([
+    { expected: "current", registry: "current" },
+    { expected: "different", registry: "different" },
+    { expected: "conflicting-root", registry: "conflicting-root" },
+    { expected: "invalid", registry: "invalid" },
+  ] as const)(
+    "preserves and truthfully reports $expected machine registration",
+    async ({ expected, registry }) => {
+      const fixture = await temporaryDirectory(
+        `casegraph-prepare-registration-${registry}-`,
+      );
+      const caseFolder = path.join(fixture, "selected-case");
+      const caseHome = path.join(caseFolder, "casegraph");
+      const configHome = path.join(fixture, "config");
+      const registryPath = path.join(configHome, "casehomes.yaml");
+      await mkdir(caseHome, { recursive: true });
+      await mkdir(configHome);
+      await writeResourceDocument(
+        path.join(caseHome, "root.yaml"),
+        strictCase(),
+      );
+      const canonicalRoot = await realpath(path.join(caseHome, "root.yaml"));
+      if (registry === "invalid") {
+        await writeFile(registryPath, "invalid: [\n");
+      } else if (registry === "current") {
+        await writeFile(registryPath, `${CASE_ID}: ${canonicalRoot}\n`);
+      } else if (registry === "conflicting-root") {
+        await writeFile(
+          registryPath,
+          `PoliceConductUS/other-case: ${canonicalRoot}\n`,
+        );
+      } else {
+        const otherHome = path.join(fixture, "other", "casegraph");
+        await mkdir(otherHome, { recursive: true });
+        await writeResourceDocument(
+          path.join(otherHome, "root.yaml"),
+          strictCase([], MEMBER_UID),
+        );
+        await writeFile(
+          registryPath,
+          `${CASE_ID}: ${await realpath(path.join(otherHome, "root.yaml"))}\n`,
+        );
+      }
+      const registryBytes = await readFile(registryPath);
+
+      const result = await prepareGitBackedCaseHome({
+        caseFolder,
+        configHome,
+        caseId: CASE_ID,
+        mode: "adopt",
+        approveExistingNonGitCaseHome: true,
+      });
+
+      expect(result.state).toBe("prepared");
+      if (result.state !== "prepared") throw new Error(result.diagnostic);
+      expect(result.report.registration.state).toBe(expected);
+      expect(result.report.recovery.registration).toBe(expected);
+      expect(await readFile(registryPath)).toEqual(registryBytes);
+    },
+  );
+
+  test("rejects a missing-child symlink swap after inspection without touching its target", async () => {
+    const caseFolder = await temporaryDirectory(
+      "casegraph-prepare-swap-missing-",
+    );
+    const configHome = await temporaryDirectory("casegraph-prepare-config-");
+    const target = await temporaryDirectory("casegraph-prepare-swap-target-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    const realGit = createGitRunner();
+    let swapped = false;
+    const swappingGit: GitRunner = async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      const normalized = args.filter(
+        (argument) => argument !== "--no-optional-locks",
+      );
+      if (
+        !swapped &&
+        cwd === (await realpath(caseFolder)) &&
+        normalized.join(" ") === "rev-parse --absolute-git-dir"
+      ) {
+        await symlink(target, caseHome, "dir");
+        swapped = true;
+      }
+      return result;
+    };
+
+    const result = await prepareGitBackedCaseHome(
+      preparationInput(caseFolder, configHome),
+      { git: swappingGit },
+    );
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      failedStep: "exact-child-recheck",
+    });
+    expect(await absentPath(path.join(target, ".git"))).toBe(true);
+    expect(await absentPath(path.join(target, "root.yaml"))).toBe(true);
+  });
+
+  test("rejects a missing-child non-directory swap after inspection without mutating it", async () => {
+    const caseFolder = await temporaryDirectory("casegraph-prepare-swap-file-");
+    const configHome = await temporaryDirectory("casegraph-prepare-config-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    const swappedBytes = Buffer.from("swapped non-directory child\n");
+    const realGit = createGitRunner();
+    let swapped = false;
+    const swappingGit: GitRunner = async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      const normalized = args.filter(
+        (argument) => argument !== "--no-optional-locks",
+      );
+      if (
+        !swapped &&
+        cwd === (await realpath(caseFolder)) &&
+        normalized.join(" ") === "rev-parse --absolute-git-dir"
+      ) {
+        await writeFile(caseHome, swappedBytes);
+        swapped = true;
+      }
+      return result;
+    };
+
+    const result = await prepareGitBackedCaseHome(
+      preparationInput(caseFolder, configHome),
+      { git: swappingGit },
+    );
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      failedStep: "exact-child-recheck",
+      report: {
+        classification: "conflict",
+        resource: { state: "not-inspected" },
+        repository: { state: "not-inspected" },
+        registration: { state: "not-inspected" },
+      },
+    });
+    expect(await readFile(caseHome)).toEqual(swappedBytes);
+  });
+
+  test("rejects an adopted directory-to-symlink swap after inspection without touching its target", async () => {
+    const caseFolder = await temporaryDirectory(
+      "casegraph-prepare-swap-adopt-",
+    );
+    const configHome = await temporaryDirectory("casegraph-prepare-config-");
+    const target = await temporaryDirectory("casegraph-prepare-swap-target-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    const preserved = path.join(caseFolder, "preserved-casegraph");
+    await mkdir(caseHome);
+    await writeResourceDocument(path.join(caseHome, "root.yaml"), strictCase());
+    const preservedRootBytes = await readFile(path.join(caseHome, "root.yaml"));
+    const realGit = createGitRunner();
+    let swapped = false;
+    const swappingGit: GitRunner = async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      const normalized = args.filter(
+        (argument) => argument !== "--no-optional-locks",
+      );
+      if (
+        !swapped &&
+        cwd === (await realpath(caseHome)) &&
+        normalized.join(" ") === "rev-parse --absolute-git-dir"
+      ) {
+        await rename(caseHome, preserved);
+        await symlink(target, caseHome, "dir");
+        swapped = true;
+      }
+      return result;
+    };
+
+    const result = await prepareGitBackedCaseHome(
+      {
+        caseFolder,
+        configHome,
+        caseId: CASE_ID,
+        mode: "adopt",
+        approveExistingNonGitCaseHome: true,
+      },
+      { git: swappingGit },
+    );
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      failedStep: "exact-child-recheck",
+    });
+    expect(await absentPath(path.join(target, ".git"))).toBe(true);
+    expect(await absentPath(path.join(target, "root.yaml"))).toBe(true);
+    expect(await readFile(path.join(preserved, "root.yaml"))).toEqual(
+      preservedRootBytes,
+    );
+  });
+
+  test("rejects a post-init child symlink swap before strict root writing", async () => {
+    const caseFolder = await temporaryDirectory("casegraph-prepare-swap-init-");
+    const configHome = await temporaryDirectory("casegraph-prepare-config-");
+    const target = await temporaryDirectory("casegraph-prepare-swap-target-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    const preserved = path.join(caseFolder, "initialized-casegraph");
+    await mkdir(caseHome);
+    const realGit = createGitRunner();
+    const swappingGit: GitRunner = async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      if (args[0] === "init") {
+        await rename(caseHome, preserved);
+        await symlink(target, caseHome, "dir");
+      }
+      return result;
+    };
+
+    const result = await prepareGitBackedCaseHome(
+      preparationInput(caseFolder, configHome),
+      { git: swappingGit },
+    );
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      failedStep: "exact-child-recheck",
+    });
+    expect(await absentPath(path.join(target, "root.yaml"))).toBe(true);
+    expect(await stat(path.join(preserved, ".git"))).toEqual(
+      expect.objectContaining({}),
+    );
+  });
+
+  test("rejects a post-write child symlink swap before strict reopen", async () => {
+    const caseFolder = await temporaryDirectory(
+      "casegraph-prepare-swap-write-",
+    );
+    const configHome = await temporaryDirectory("casegraph-prepare-config-");
+    const target = await temporaryDirectory("casegraph-prepare-swap-target-");
+    const caseHome = path.join(caseFolder, "casegraph");
+    const preserved = path.join(caseFolder, "written-casegraph");
+    await mkdir(caseHome);
+    await writeResourceDocument(
+      path.join(target, "root.yaml"),
+      strictCase([], MEMBER_UID),
+    );
+    const targetBytes = await readFile(path.join(target, "root.yaml"));
+
+    const result = await prepareGitBackedCaseHome(
+      preparationInput(caseFolder, configHome),
+      {
+        writeRoot: async (...args) => {
+          await writeResourceDocument(...args);
+          await rename(caseHome, preserved);
+          await symlink(target, caseHome, "dir");
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      failedStep: "exact-child-recheck",
+    });
+    expect(await readFile(path.join(target, "root.yaml"))).toEqual(targetBytes);
+    expect(await readFile(path.join(preserved, "root.yaml"))).not.toEqual(
+      targetBytes,
     );
   });
 
@@ -410,7 +672,11 @@ describe("local Git-backed CaseHome preparation", () => {
     expect(result.state).toBe("prepared");
     if (result.state !== "prepared") throw new Error(result.diagnostic);
     const after = await snapshotOuterRepository(caseFolder);
-    expect(after.files["outer.txt"]).toBe(before.files["outer.txt"]);
+    expect(
+      Object.fromEntries(
+        Object.keys(before.files).map((name) => [name, after.files[name]]),
+      ),
+    ).toEqual(before.files);
     expect(after.index).toEqual(before.index);
     expect(after.refs).toBe(before.refs);
     expect(after.branch).toBe(before.branch);
@@ -438,7 +704,14 @@ describe("local Git-backed CaseHome preparation", () => {
     expect(after.status).toEqual(before.status);
     expect(after.index).toEqual(before.index);
     expect(after.refs).toBe(before.refs);
-    expect(after.files[".gitignore"]).toBe(before.files[".gitignore"]);
+    expect(after.branch).toBe(before.branch);
+    expect(after.remotes).toBe(before.remotes);
+    expect(after.upstreams).toBe(before.upstreams);
+    expect(
+      Object.fromEntries(
+        Object.keys(before.files).map((name) => [name, after.files[name]]),
+      ),
+    ).toEqual(before.files);
   });
 
   test("adopts child content already represented by outer status without inventing another outer delta", async () => {
@@ -467,13 +740,7 @@ describe("local Git-backed CaseHome preparation", () => {
     expect(result.state).toBe("prepared");
     const after = await snapshotOuterRepository(caseFolder);
     expect(before.status).toEqual(["?? casegraph/"]);
-    expect(after.status).toEqual(before.status);
-    expect(after.index).toEqual(before.index);
-    expect(after.refs).toBe(before.refs);
-    expect(after.files["outer.txt"]).toBe(before.files["outer.txt"]);
-    expect(after.files["casegraph/root.yaml"]).toBe(
-      before.files["casegraph/root.yaml"],
-    );
+    expect(after).toEqual(before);
   });
 
   test("rejects an existing repository whose configured worktree is a different top-level", async () => {
@@ -521,6 +788,7 @@ describe("local Git-backed CaseHome preparation", () => {
       const caseHome = path.join(caseFolder, "casegraph");
       const configHome = path.join(fixture, "config");
       await mkdir(caseFolder);
+      let relatedRepositoryPath: string;
 
       if (variant === "linked-worktree") {
         const primary = path.join(fixture, "primary");
@@ -533,17 +801,16 @@ describe("local Git-backed CaseHome preparation", () => {
         await git(primary, ["add", "root.yaml"]);
         await git(primary, ["commit", "-m", "primary"]);
         await git(primary, ["worktree", "add", "--detach", caseHome]);
+        relatedRepositoryPath = primary;
       } else if (variant === "separate-git-dir") {
         await mkdir(caseHome);
-        await git(caseHome, [
-          "init",
-          "--separate-git-dir",
-          path.join(fixture, "separate-metadata.git"),
-        ]);
+        const separateMetadata = path.join(fixture, "separate-metadata.git");
+        await git(caseHome, ["init", "--separate-git-dir", separateMetadata]);
         await writeResourceDocument(
           path.join(caseHome, "root.yaml"),
           strictCase(),
         );
+        relatedRepositoryPath = separateMetadata;
       } else {
         const source = path.join(fixture, "submodule-source");
         await mkdir(source);
@@ -563,9 +830,16 @@ describe("local Git-backed CaseHome preparation", () => {
           source,
           "casegraph",
         ]);
+        await git(caseFolder, ["commit", "-m", "record submodule"]);
+        relatedRepositoryPath = caseFolder;
       }
       expect((await lstat(path.join(caseHome, ".git"))).isFile()).toBe(true);
       const before = await snapshotTree(caseHome);
+      const relatedBefore = await snapshotTree(relatedRepositoryPath);
+      const relatedGitBefore =
+        variant === "submodule"
+          ? await snapshotOuterRepository(relatedRepositoryPath)
+          : undefined;
 
       const result = await prepareGitBackedCaseHome({
         caseFolder,
@@ -586,6 +860,12 @@ describe("local Git-backed CaseHome preparation", () => {
         gitFile: path.join(await realpath(caseHome), ".git"),
       });
       expect(await snapshotTree(caseHome)).toEqual(before);
+      expect(await snapshotTree(relatedRepositoryPath)).toEqual(relatedBefore);
+      if (relatedGitBefore !== undefined) {
+        expect(await snapshotOuterRepository(relatedRepositoryPath)).toEqual(
+          relatedGitBefore,
+        );
+      }
       expect(await absentPath(path.join(configHome, "casehomes.yaml"))).toBe(
         true,
       );
@@ -648,6 +928,7 @@ describe("local Git-backed CaseHome preparation", () => {
           return { exitCode: 127, stdout: "", stderr: "git not found" };
         }
         if (boundary === "git-initialization" && command[0] === "init") {
+          await realGit(args, cwd);
           return { exitCode: 1, stdout: "", stderr: "init denied" };
         }
         return realGit(args, cwd);
@@ -658,8 +939,9 @@ describe("local Git-backed CaseHome preparation", () => {
           git: gitRunner,
           ...(boundary === "root-write"
             ? {
-                writeRoot: () => {
-                  return Promise.reject(new Error("writer failed"));
+                writeRoot: async (rootPath) => {
+                  await writeFile(rootPath, "partial root bytes\n");
+                  throw new Error("writer failed after partial root write");
                 },
               }
             : {}),
@@ -695,6 +977,13 @@ describe("local Git-backed CaseHome preparation", () => {
         expect(
           await absentPath(path.join(caseFolder, "casegraph", "root.yaml")),
         ).toBe(true);
+        expect(await stat(path.join(caseFolder, "casegraph", ".git"))).toEqual(
+          expect.objectContaining({}),
+        );
+        expect(result.report.repository).toMatchObject({
+          state: "primary",
+          unborn: true,
+        });
       }
       if (boundary === "root-write") {
         expect(
@@ -704,8 +993,18 @@ describe("local Git-backed CaseHome preparation", () => {
           ]),
         ).toBe("true");
         expect(
-          await absentPath(path.join(caseFolder, "casegraph", "root.yaml")),
-        ).toBe(true);
+          await readFile(
+            path.join(caseFolder, "casegraph", "root.yaml"),
+            "utf8",
+          ),
+        ).toBe("partial root bytes\n");
+        expect(result.report.resource).toMatchObject({ state: "invalid" });
+        expect(result.report.recovery.paths).toContain(
+          path.join(
+            await realpath(path.join(caseFolder, "casegraph")),
+            "root.yaml",
+          ),
+        );
       }
       if (boundary === "resource-reopen") {
         expect(
