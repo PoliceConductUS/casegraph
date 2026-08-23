@@ -86,144 +86,174 @@ function callsAtOrBelow(calls: readonly string[], target: string): string[] {
 }
 
 describe("exact child path observation", () => {
-  test("lstats a symlink once without following or reading any target path", async () => {
-    const caseFolder = await mkdtemp(
-      path.join(tmpdir(), "casegraph-symlink-observer-"),
-    );
-    const configHome = await mkdtemp(
-      path.join(tmpdir(), "casegraph-config-observer-"),
-    );
-    const target = await mkdtemp(
-      path.join(tmpdir(), "casegraph-target-observer-"),
-    );
-    const registeredHome = await mkdtemp(
-      path.join(tmpdir(), "casegraph-registered-observer-"),
-    );
-    temporaryDirectories.push(caseFolder, configHome, target, registeredHome);
-    const caseHome = path.join(caseFolder, "casegraph");
-    const registeredRoot = path.join(registeredHome, "casegraph", "root.yaml");
-    await mkdir(path.dirname(registeredRoot));
-    await writeFile(
-      path.join(target, "root.yaml"),
-      "target must stay unread\n",
-    );
-    await writeFile(
-      registeredRoot,
-      [
-        "apiVersion: casegraph.policeconduct.org/v1alpha1",
-        "kind: Case",
-        "metadata:",
-        "  uid: tz4a98xxat96iws9zmbrgj3a",
-        "spec:",
-        "  resources: []",
-        "",
-      ].join("\n"),
-    );
-    const canonicalRegisteredRoot = await import("node:fs/promises").then(
-      ({ realpath }) => realpath(registeredRoot),
-    );
-    await writeFile(
-      path.join(configHome, "casehomes.yaml"),
-      `PoliceConductUS/symlink: ${canonicalRegisteredRoot}\n`,
-    );
-    await symlink(target, caseHome);
-    const canonicalCaseFolder = await import("node:fs/promises").then(
-      ({ realpath }) => realpath(caseFolder),
-    );
-    const canonicalTarget = await import("node:fs/promises").then(
-      ({ realpath }) => realpath(target),
-    );
-    const canonicalCaseHome = path.join(canonicalCaseFolder, "casegraph");
-    for (const calls of Object.values(observedFs)) calls.length = 0;
-    strictOpenCalls.length = 0;
-    let registrationReads = 0;
+  test.each([undefined, "origin"] as const)(
+    "lstats a symlink once without following or reading any target path with selected remote %s",
+    async (selectedRemote) => {
+      const caseFolder = await mkdtemp(
+        path.join(tmpdir(), "casegraph-symlink-observer-"),
+      );
+      const configHome = await mkdtemp(
+        path.join(tmpdir(), "casegraph-config-observer-"),
+      );
+      const target = await mkdtemp(
+        path.join(tmpdir(), "casegraph-target-observer-"),
+      );
+      const registeredHome = await mkdtemp(
+        path.join(tmpdir(), "casegraph-registered-observer-"),
+      );
+      temporaryDirectories.push(caseFolder, configHome, target, registeredHome);
+      const caseHome = path.join(caseFolder, "casegraph");
+      const registeredRoot = path.join(
+        registeredHome,
+        "casegraph",
+        "root.yaml",
+      );
+      await mkdir(path.dirname(registeredRoot));
+      await writeFile(
+        path.join(target, "root.yaml"),
+        "target must stay unread\n",
+      );
+      await writeFile(
+        registeredRoot,
+        [
+          "apiVersion: casegraph.policeconduct.org/v1alpha1",
+          "kind: Case",
+          "metadata:",
+          "  uid: tz4a98xxat96iws9zmbrgj3a",
+          "spec:",
+          "  resources: []",
+          "",
+        ].join("\n"),
+      );
+      const canonicalRegisteredRoot = await import("node:fs/promises").then(
+        ({ realpath }) => realpath(registeredRoot),
+      );
+      await writeFile(
+        path.join(configHome, "casehomes.yaml"),
+        `PoliceConductUS/symlink: ${canonicalRegisteredRoot}\n`,
+      );
+      await symlink(target, caseHome);
+      const canonicalCaseFolder = await import("node:fs/promises").then(
+        ({ realpath }) => realpath(caseFolder),
+      );
+      const canonicalTarget = await import("node:fs/promises").then(
+        ({ realpath }) => realpath(target),
+      );
+      const canonicalCaseHome = path.join(canonicalCaseFolder, "casegraph");
+      for (const calls of Object.values(observedFs)) calls.length = 0;
+      strictOpenCalls.length = 0;
+      let registrationReads = 0;
 
-    const report = await inspectGitBackedCaseHome(
-      {
-        caseFolder,
-        caseId: "PoliceConductUS/symlink",
-        configHome,
-      },
-      {
-        registrationStore: {
-          read: async () => {
-            registrationReads += 1;
-            const fs = await import("node:fs/promises");
-            await fs.readFile(path.join(canonicalCaseHome, "root.yaml"));
-            const handle = await fs.open(
-              path.join(canonicalTarget, "root.yaml"),
-              "r",
-            );
-            await handle.close();
-            return new Map();
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder,
+          caseId: "PoliceConductUS/symlink",
+          configHome,
+          selectedRemote,
+        },
+        {
+          registrationStore: {
+            read: async () => {
+              registrationReads += 1;
+              const fs = await import("node:fs/promises");
+              await fs.readFile(path.join(canonicalCaseHome, "root.yaml"));
+              const handle = await fs.open(
+                path.join(canonicalTarget, "root.yaml"),
+                "r",
+              );
+              await handle.close();
+              return new Map();
+            },
           },
         },
-      },
-    );
+      );
 
-    expect(report.classification).toBe("conflict");
-    expect(callsAtOrBelow(observedFs.lstat, canonicalCaseHome)).toEqual([
-      canonicalCaseHome,
-    ]);
-    expect(callsAtOrBelow(observedFs.realpath, canonicalTarget)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.lstat, canonicalTarget)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.readFile, canonicalTarget)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.readdir, canonicalTarget)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.open, canonicalTarget)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.realpath, canonicalCaseHome)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.readFile, canonicalCaseHome)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.readdir, canonicalCaseHome)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.open, canonicalCaseHome)).toEqual([]);
-    expect(strictOpenCalls).toEqual([]);
-    expect(registrationReads).toBe(0);
-    expect(report.registration.state).toBe("not-inspected");
-  });
+      expect(report.classification).toBe("conflict");
+      expect(callsAtOrBelow(observedFs.lstat, canonicalCaseHome)).toEqual([
+        canonicalCaseHome,
+      ]);
+      expect(callsAtOrBelow(observedFs.realpath, canonicalTarget)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.lstat, canonicalTarget)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.readFile, canonicalTarget)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.readdir, canonicalTarget)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.open, canonicalTarget)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.realpath, canonicalCaseHome)).toEqual(
+        [],
+      );
+      expect(callsAtOrBelow(observedFs.readFile, canonicalCaseHome)).toEqual(
+        [],
+      );
+      expect(callsAtOrBelow(observedFs.readdir, canonicalCaseHome)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.open, canonicalCaseHome)).toEqual([]);
+      expect(strictOpenCalls).toEqual([]);
+      expect(registrationReads).toBe(0);
+      expect(report.registration.state).toBe("not-inspected");
+      expect(report.structuralPushTarget).toEqual({
+        state: "not-inspected",
+        ready: false,
+        ...(selectedRemote === undefined ? {} : { remote: "origin" }),
+        diagnostic: `Repository was not inspected because Exact CaseHome child ${canonicalCaseHome} is a symbolic link`,
+        provesWritability: false,
+      });
+    },
+  );
 
-  test("lstats a non-directory once without opening or reading the child", async () => {
-    const caseFolder = await mkdtemp(
-      path.join(tmpdir(), "casegraph-file-observer-"),
-    );
-    const configHome = await mkdtemp(
-      path.join(tmpdir(), "casegraph-config-observer-"),
-    );
-    temporaryDirectories.push(caseFolder, configHome);
-    const canonicalCaseFolder = await import("node:fs/promises").then(
-      ({ realpath }) => realpath(caseFolder),
-    );
-    const caseHome = path.join(canonicalCaseFolder, "casegraph");
-    await writeFile(caseHome, "non-directory child\n");
-    for (const calls of Object.values(observedFs)) calls.length = 0;
-    strictOpenCalls.length = 0;
-    let registrationReads = 0;
+  test.each([undefined, "origin"] as const)(
+    "lstats a non-directory once without opening or reading the child with selected remote %s",
+    async (selectedRemote) => {
+      const caseFolder = await mkdtemp(
+        path.join(tmpdir(), "casegraph-file-observer-"),
+      );
+      const configHome = await mkdtemp(
+        path.join(tmpdir(), "casegraph-config-observer-"),
+      );
+      temporaryDirectories.push(caseFolder, configHome);
+      const canonicalCaseFolder = await import("node:fs/promises").then(
+        ({ realpath }) => realpath(caseFolder),
+      );
+      const caseHome = path.join(canonicalCaseFolder, "casegraph");
+      await writeFile(caseHome, "non-directory child\n");
+      for (const calls of Object.values(observedFs)) calls.length = 0;
+      strictOpenCalls.length = 0;
+      let registrationReads = 0;
 
-    const report = await inspectGitBackedCaseHome(
-      {
-        caseFolder,
-        caseId: "PoliceConductUS/non-directory",
-        configHome,
-      },
-      {
-        registrationStore: {
-          read: async () => {
-            registrationReads += 1;
-            const fs = await import("node:fs/promises");
-            await fs.readFile(caseHome);
-            const handle = await fs.open(caseHome, "r");
-            await handle.close();
-            return new Map();
+      const report = await inspectGitBackedCaseHome(
+        {
+          caseFolder,
+          caseId: "PoliceConductUS/non-directory",
+          configHome,
+          selectedRemote,
+        },
+        {
+          registrationStore: {
+            read: async () => {
+              registrationReads += 1;
+              const fs = await import("node:fs/promises");
+              await fs.readFile(caseHome);
+              const handle = await fs.open(caseHome, "r");
+              await handle.close();
+              return new Map();
+            },
           },
         },
-      },
-    );
+      );
 
-    expect(report.classification).toBe("conflict");
-    expect(callsAtOrBelow(observedFs.lstat, caseHome)).toEqual([caseHome]);
-    expect(callsAtOrBelow(observedFs.realpath, caseHome)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.readFile, caseHome)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.readdir, caseHome)).toEqual([]);
-    expect(callsAtOrBelow(observedFs.open, caseHome)).toEqual([]);
-    expect(strictOpenCalls).toEqual([]);
-    expect(registrationReads).toBe(0);
-    expect(report.registration.state).toBe("not-inspected");
-  });
+      expect(report.classification).toBe("conflict");
+      expect(callsAtOrBelow(observedFs.lstat, caseHome)).toEqual([caseHome]);
+      expect(callsAtOrBelow(observedFs.realpath, caseHome)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.readFile, caseHome)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.readdir, caseHome)).toEqual([]);
+      expect(callsAtOrBelow(observedFs.open, caseHome)).toEqual([]);
+      expect(strictOpenCalls).toEqual([]);
+      expect(registrationReads).toBe(0);
+      expect(report.registration.state).toBe("not-inspected");
+      expect(report.structuralPushTarget).toEqual({
+        state: "not-inspected",
+        ready: false,
+        ...(selectedRemote === undefined ? {} : { remote: "origin" }),
+        diagnostic: `Repository was not inspected because Exact CaseHome child ${caseHome} is a non-directory file`,
+        provesWritability: false,
+      });
+    },
+  );
 });

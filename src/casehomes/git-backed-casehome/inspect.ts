@@ -597,6 +597,9 @@ export async function inspectGitBackedCaseHome(
       structuralPushTarget: {
         state: "not-inspected",
         ready: false,
+        ...(input.selectedRemote === undefined
+          ? {}
+          : { remote: input.selectedRemote }),
         diagnostic: repositoryDiagnostic,
         provesWritability: false,
       },
