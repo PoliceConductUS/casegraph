@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -167,8 +174,19 @@ describe("rooted CaseHome resources", () => {
       resourceReferences: [],
       ownedPaths: [],
     });
-    expect(Object.keys(snapshot).sort()).toEqual(["count", "resolve"]);
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+      ].sort(),
+    );
+    expect(Object.keys(snapshot).sort()).toEqual([
+      "count",
+      "documentPaths",
+      "resolve",
+    ]);
     expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
     expect(Object.isFrozen(snapshot.resolve(nodeAUid))).toBe(true);
   });
 
@@ -381,6 +399,13 @@ spec:
     const snapshot = await openCaseHomeResources(caseHomePath, registry);
 
     expect(snapshot.count).toBe(3);
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+        join(await realpath(caseHomePath), nodeBUid, "root.yaml"),
+      ].sort(),
+    );
     expect(snapshot.resolve(nodeAUid).resource.metadata.uid).toBe(nodeAUid);
     expect(snapshot.resolve(nodeBUid).resource.metadata.uid).toBe(nodeBUid);
   });
@@ -535,6 +560,14 @@ spec:
 
     expect(snapshot.count).toBe(2);
     expect(snapshot.resolve(nodeAUid)).toBe(snapshot.resolve(nodeAUid));
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+      ].sort(),
+    );
+    expect(new Set(snapshot.documentPaths).size).toBe(2);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
   });
 
   test("treats a direct Case self-reference as an already resolved member", async () => {
@@ -545,6 +578,11 @@ spec:
 
     expect(snapshot.count).toBe(1);
     expect(snapshot.resolve(caseUid).resource.metadata.uid).toBe(caseUid);
+    expect(snapshot.documentPaths).toEqual([
+      join(await realpath(caseHomePath), "root.yaml"),
+    ]);
+    expect(new Set(snapshot.documentPaths).size).toBe(1);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
   });
 
   test("treats a non-root reference back to the Case root as a cycle", async () => {
@@ -556,6 +594,14 @@ spec:
 
     expect(snapshot.count).toBe(2);
     expect(snapshot.resolve(caseUid).resource.kind).toBe("Case");
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+      ].sort(),
+    );
+    expect(new Set(snapshot.documentPaths).size).toBe(2);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
   });
 
   test("terminates an A-to-B-to-A cycle with one member per UID", async () => {
@@ -569,6 +615,40 @@ spec:
     expect(snapshot.count).toBe(3);
     expect(snapshot.resolve(nodeAUid).resource.metadata.uid).toBe(nodeAUid);
     expect(snapshot.resolve(nodeBUid).resource.metadata.uid).toBe(nodeBUid);
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(await realpath(caseHomePath), "root.yaml"),
+        join(await realpath(caseHomePath), nodeAUid, "root.yaml"),
+        join(await realpath(caseHomePath), nodeBUid, "root.yaml"),
+      ].sort(),
+    );
+    expect(new Set(snapshot.documentPaths).size).toBe(3);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
+  });
+
+  test("reports physical document paths when opened through an aliased CaseHome", async () => {
+    const caseHomePath = await createTemporaryCaseHome();
+    const aliasParent = await createTemporaryCaseHome();
+    const aliasPath = join(aliasParent, "casehome-alias");
+    await writeRoot(caseHomePath, caseResource([nodeAUid]));
+    await writeNonRoot(caseHomePath, nodeAUid, testNode(nodeAUid));
+    await symlink(caseHomePath, aliasPath);
+
+    const snapshot = await openCaseHomeResources(aliasPath, registry);
+    const physicalHome = await realpath(caseHomePath);
+
+    expect(snapshot.documentPaths).toEqual(
+      [
+        join(physicalHome, "root.yaml"),
+        join(physicalHome, nodeAUid, "root.yaml"),
+      ].sort(),
+    );
+    expect(
+      snapshot.documentPaths.some((documentPath) =>
+        documentPath.startsWith(aliasPath),
+      ),
+    ).toBe(false);
+    expect(Object.isFrozen(snapshot.documentPaths)).toBe(true);
   });
 
   test("inspects each reachable UID once without reading or inspecting an unreferenced directory", async () => {
